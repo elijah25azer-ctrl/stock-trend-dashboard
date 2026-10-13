@@ -1,31 +1,27 @@
 
-import os
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
 
-# --------------------------------------------------
+# ==================================================
 # PAGE SETTINGS
-# --------------------------------------------------
+# ==================================================
 
 st.set_page_config(
-    page_title="AI Stock Signal Dashboard",
+    page_title="Stock Signal Dashboard",
     page_icon="📈",
     layout="wide",
 )
 
-st.title("📈 AI Stock Signal Dashboard")
-st.caption(
-    "Stock prices and technical indicators for educational purposes. "
-    "Signals are not guarantees of future performance."
-)
+st.title("📈 Stock Signal Dashboard")
+st.caption("Candlestick charts • Technical signals • Watchlist")
 
-# --------------------------------------------------
+# ==================================================
 # SIDEBAR
-# --------------------------------------------------
+# ==================================================
 
-st.sidebar.header("Dashboard Settings")
+st.sidebar.header("Stock Settings")
 
 ticker = st.sidebar.text_input(
     "Stock ticker",
@@ -35,412 +31,343 @@ ticker = st.sidebar.text_input(
 period = st.sidebar.selectbox(
     "Chart history",
     ["1mo", "3mo", "6mo", "1y", "2y"],
-    index=1,
+    index=2,
 )
 
 interval = st.sidebar.selectbox(
-    "Chart interval",
+    "Candle interval",
     ["1d", "1h", "30m", "15m"],
     index=0,
 )
 
-watchlist_text = st.sidebar.text_input(
-    "Watchlist (comma-separated)",
-    value="MSFT, GOOGL, AAPL, NVDA",
+watchlist = st.sidebar.multiselect(
+    "Watchlist",
+    ["MSFT", "AAPL", "NVDA", "TSLA", "AMZN", "GOOGL", "META"],
+    default=["MSFT", "AAPL", "NVDA"],
 )
 
 auto_refresh = st.sidebar.toggle(
     "Refresh every 60 seconds",
-    value=False,
+    value=True,
 )
 
-if st.sidebar.button("🔄 Refresh now", use_container_width=True):
+if st.sidebar.button("🔄 Refresh data now"):
     st.cache_data.clear()
     st.rerun()
 
-# Yahoo Finance limits intraday history.
-if interval in ["1h", "30m", "15m"] and period in ["1y", "2y"]:
-    st.sidebar.warning(
-        "Intraday data has limited history. "
-        "The app will use the selected period, but Yahoo Finance "
-        "may return less data than requested."
-    )
+if not ticker:
+    st.warning("Enter a stock ticker to begin.")
+    st.stop()
 
-# --------------------------------------------------
-# DOWNLOAD STOCK DATA
-# --------------------------------------------------
+# ==================================================
+# STOCK DATA
+# ==================================================
 
-@st.cache_data(ttl=60)
-def download_stock_data(symbol, selected_period, selected_interval):
-    data = yf.download(
+@st.cache_data(ttl=55)
+def get_stock_data(symbol, history, candle_interval):
+    df = yf.download(
         symbol,
-        period=selected_period,
-        interval=selected_interval,
+        period=history,
+        interval=candle_interval,
         auto_adjust=True,
         progress=False,
         threads=False,
     )
 
-    if data is None or data.empty:
+    if df is None or df.empty:
         return pd.DataFrame()
 
-    # Handle Yahoo Finance MultiIndex columns.
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
 
-    data = data.loc[:, ~data.columns.duplicated()]
-    data = data.copy()
+    df = df.loc[:, ~df.columns.duplicated()].copy()
 
-    required_columns = ["Open", "High", "Low", "Close", "Volume"]
+    required = ["Open", "High", "Low", "Close"]
 
-    for column in required_columns:
-        if column not in data.columns:
-            return pd.DataFrame()
+    if not all(col in df.columns for col in required):
+        return pd.DataFrame()
 
-    for column in required_columns:
-        data[column] = pd.to_numeric(
-            data[column], errors="coerce"
-        )
+    for col in required:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
 
-    data = data.dropna(subset=["Open", "High", "Low", "Close"])
+    return df.dropna(subset=required).copy()
 
-    return data
-
-
-# --------------------------------------------------
+# ==================================================
 # TECHNICAL INDICATORS
-# --------------------------------------------------
+# ==================================================
 
-def calculate_indicators(data):
-    data = data.copy()
+def add_indicators(df):
+    df = df.copy()
+    close = df["Close"].astype(float)
 
-    data["SMA20"] = data["Close"].rolling(
-        window=20, min_periods=20
-    ).mean()
+    df["SMA20"] = close.rolling(20).mean()
+    df["SMA50"] = close.rolling(50).mean()
 
-    data["SMA50"] = data["Close"].rolling(
-        window=50, min_periods=50
-    ).mean()
+    change = close.diff()
+    gains = change.clip(lower=0)
+    losses = -change.clip(upper=0)
 
-    delta = data["Close"].diff()
-
-    gains = delta.clip(lower=0)
-    losses = -delta.clip(upper=0)
-
-    average_gain = gains.ewm(
+    avg_gain = gains.ewm(
         alpha=1 / 14,
         min_periods=14,
         adjust=False,
     ).mean()
 
-    average_loss = losses.ewm(
+    avg_loss = losses.ewm(
         alpha=1 / 14,
         min_periods=14,
         adjust=False,
     ).mean()
 
-    relative_strength = average_gain / average_loss
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    rsi = 100 - (100 / (1 + rs))
 
-    data["RSI"] = 100 - (
-        100 / (1 + relative_strength)
-    )
+    rsi.loc[(avg_loss == 0) & (avg_gain > 0)] = 100
+    rsi.loc[(avg_gain == 0) & (avg_loss > 0)] = 0
+    rsi.loc[(avg_gain == 0) & (avg_loss == 0)] = 50
 
-    # Handle prices that have not changed during the RSI period.
-    no_movement = (average_gain == 0) & (average_loss == 0)
-    data.loc[no_movement, "RSI"] = 50
+    df["RSI"] = rsi
 
-    only_gains = (average_gain > 0) & (average_loss == 0)
-    data.loc[only_gains, "RSI"] = 100
+    return df
 
-    only_losses = (average_gain == 0) & (average_loss > 0)
-    data.loc[only_losses, "RSI"] = 0
+# ==================================================
+# SIGNAL CALCULATION
+# ==================================================
 
-    return data
-
-
-# --------------------------------------------------
-# SIGNAL RULES
-# --------------------------------------------------
-
-def get_signal(data):
-    if data.empty or len(data) < 50:
-        return "INSUFFICIENT DATA", [
-            "At least 50 price candles are needed."
+def calculate_signal(df):
+    if len(df) < 2:
+        return "INSUFFICIENT DATA", 0, 0, [
+            "Not enough price candles."
         ]
 
-    last = data.iloc[-1]
-    previous = data.iloc[-2]
+    last = df.iloc[-1]
 
-    close = last["Close"]
+    price = float(last["Close"])
+    rsi = last["RSI"]
     sma20 = last["SMA20"]
     sma50 = last["SMA50"]
-    rsi = last["RSI"]
 
-    if pd.isna(sma20) or pd.isna(sma50) or pd.isna(rsi):
-        return "INSUFFICIENT DATA", [
-            "Some technical indicators are unavailable."
-        ]
-
+    score = 0
+    checks = 0
     reasons = []
 
-    bullish = 0
-    bearish = 0
+    # Price versus SMA20
+    if pd.notna(sma20):
+        checks += 1
 
-    if close > sma20:
-        bullish += 1
-        reasons.append("Price is above the 20-period average.")
+        if price > float(sma20):
+            score += 1
+            reasons.append(
+                "Bullish: price is above its 20-period average."
+            )
+        elif price < float(sma20):
+            score -= 1
+            reasons.append(
+                "Bearish: price is below its 20-period average."
+            )
+        else:
+            reasons.append("Price is equal to SMA20.")
     else:
-        bearish += 1
-        reasons.append("Price is below the 20-period average.")
+        reasons.append("SMA20 is unavailable.")
 
-    if sma20 > sma50:
-        bullish += 1
-        reasons.append("The 20-period average is above the 50-period average.")
+    # SMA20 versus SMA50
+    if pd.notna(sma20) and pd.notna(sma50):
+        checks += 1
+
+        if float(sma20) > float(sma50):
+            score += 1
+            reasons.append("Bullish: SMA20 is above SMA50.")
+        elif float(sma20) < float(sma50):
+            score -= 1
+            reasons.append("Bearish: SMA20 is below SMA50.")
+        else:
+            reasons.append("SMA20 and SMA50 are equal.")
     else:
-        bearish += 1
-        reasons.append("The 20-period average is below the 50-period average.")
+        reasons.append("Moving averages need more historical data.")
 
-    if 50 <= rsi <= 70:
-        bullish += 1
-        reasons.append(f"RSI is {rsi:.1f}, showing positive momentum.")
-    elif rsi < 30:
-        bullish += 1
-        reasons.append(f"RSI is {rsi:.1f}; the stock may be oversold.")
-    elif rsi > 70:
-        bearish += 1
-        reasons.append(f"RSI is {rsi:.1f}; the stock may be overbought.")
+    # RSI
+    if pd.notna(rsi):
+        rsi = float(rsi)
+        checks += 1
+
+        if rsi < 30:
+            score += 1
+            reasons.append(
+                f"RSI is {rsi:.1f}: commonly considered oversold."
+            )
+        elif rsi > 70:
+            score -= 1
+            reasons.append(
+                f"RSI is {rsi:.1f}: commonly considered overbought."
+            )
+        else:
+            reasons.append(f"RSI is {rsi:.1f}, within 30–70.")
     else:
-        reasons.append(f"RSI is {rsi:.1f}, below the positive-momentum range.")
+        reasons.append("RSI is unavailable.")
 
-    if close > sma20 and sma20 > sma50 and 50 <= rsi <= 70:
+    if checks < 2:
+        signal = "INSUFFICIENT DATA"
+    elif score >= 2:
         signal = "BUY"
-    elif close < sma20 and sma20 < sma50 and (rsi < 50 or rsi > 70):
+    elif score <= -2:
         signal = "SELL"
     else:
         signal = "HOLD"
 
-    return signal, reasons
+    return signal, score, checks, reasons
 
-
-# --------------------------------------------------
+# ==================================================
 # CANDLESTICK PATTERNS
-# --------------------------------------------------
+# ==================================================
 
-def detect_patterns(data):
-    patterns = []
-
-    if len(data) < 2:
+def detect_patterns(df):
+    if len(df) < 2:
         return ["Not enough candles to check patterns."]
 
-    last = data.iloc[-1]
-    previous = data.iloc[-2]
+    current = df.iloc[-1]
+    previous = df.iloc[-2]
 
-    body = abs(last["Close"] - last["Open"])
-    candle_range = last["High"] - last["Low"]
+    o = float(current["Open"])
+    h = float(current["High"])
+    l = float(current["Low"])
+    c = float(current["Close"])
 
-    if candle_range > 0:
-        if body <= candle_range * 0.1:
-            patterns.append("Doji-like candle: opening and closing prices are close.")
+    po = float(previous["Open"])
+    pc = float(previous["Close"])
 
-        lower_wick = min(last["Open"], last["Close"]) - last["Low"]
-        upper_wick = last["High"] - max(last["Open"], last["Close"])
+    body = abs(c - o)
+    previous_body = abs(pc - po)
+    candle_range = max(h - l, 1e-9)
 
-        if lower_wick >= body * 2 and upper_wick <= body:
-            patterns.append("Hammer-like candle: possible bullish reversal pattern.")
+    upper_wick = h - max(o, c)
+    lower_wick = min(o, c) - l
 
-        if upper_wick >= body * 2 and lower_wick <= body:
-            patterns.append("Shooting-star-like candle: possible bearish reversal pattern.")
-
-    previous_bearish = previous["Close"] < previous["Open"]
-    previous_bullish = previous["Close"] > previous["Open"]
-    current_bullish = last["Close"] > last["Open"]
-    current_bearish = last["Close"] < last["Open"]
+    patterns = []
 
     if (
-        previous_bearish
-        and current_bullish
-        and last["Open"] <= previous["Close"]
-        and last["Close"] >= previous["Open"]
+        pc < po and c > o
+        and o <= pc and c >= po
+        and body >= previous_body
     ):
-        patterns.append("Bullish engulfing-like candle pattern.")
+        patterns.append("Possible bullish engulfing pattern.")
 
     if (
-        previous_bullish
-        and current_bearish
-        and last["Open"] >= previous["Close"]
-        and last["Close"] <= previous["Open"]
+        pc > po and c < o
+        and o >= pc and c <= po
+        and body >= previous_body
     ):
-        patterns.append("Bearish engulfing-like candle pattern.")
+        patterns.append("Possible bearish engulfing pattern.")
+
+    if (
+        lower_wick >= 2 * max(body, 1e-9)
+        and upper_wick <= max(body * 0.6, candle_range * 0.08)
+        and body / candle_range <= 0.4
+    ):
+        patterns.append("Hammer-like candle with a long lower wick.")
+
+    if (
+        upper_wick >= 2 * max(body, 1e-9)
+        and lower_wick <= max(body * 0.6, candle_range * 0.08)
+        and body / candle_range <= 0.4
+    ):
+        patterns.append("Shooting-star-like candle with a long upper wick.")
 
     if not patterns:
-        patterns.append("No basic candlestick pattern detected.")
+        patterns.append("No selected pattern detected on the latest candle.")
 
     return patterns
 
-
-# --------------------------------------------------
-# OPTIONAL AI ANALYST
-# --------------------------------------------------
-
-def get_api_key():
-    api_key = os.getenv("OPENAI_API_KEY", "").strip()
-
-    if api_key:
-        return api_key
-
-    try:
-        return st.secrets.get("OPENAI_API_KEY", "").strip()
-    except Exception:
-        return ""
-
-
-def analyze_with_ai(symbol, data, signal, reasons, patterns):
-    api_key = get_api_key()
-
-    if not api_key:
-        return (
-            "AI analysis is not configured. Add your OpenAI API key "
-            "to the app's environment or Streamlit secrets."
-        )
-
-    try:
-        from openai import OpenAI
-
-        last = data.iloc[-1]
-
-        rsi_text = (
-            f"{float(last['RSI']):.2f}"
-            if pd.notna(last["RSI"])
-            else "Unavailable"
-        )
-
-        prompt = f"""
-Analyze this stock's technical indicators for educational purposes.
-
-Ticker: {symbol}
-Latest available price: ${float(last['Close']):.2f}
-Technical signal: {signal}
-SMA20: {last['SMA20']}
-SMA50: {last['SMA50']}
-RSI: {rsi_text}
-
-Signal reasons:
-{chr(10).join(reasons)}
-
-Candlestick observations:
-{chr(10).join(patterns)}
-
-Explain the trend, uncertainty, and limitations in plain English.
-Do not promise returns or present the signal as a guaranteed prediction.
-Do not invent news, prices, or financial information.
-This is technical analysis, not personalized financial advice.
-"""
-
-        client = OpenAI(api_key=api_key)
-
-        response = client.responses.create(
-            model="gpt-4.1-mini",
-            input=prompt,
-        )
-
-        return response.output_text
-
-    except Exception as error:
-        return (
-            "AI analysis could not be completed. Check that the OpenAI "
-            "package is installed, your API key is valid, and your API "
-            f"account is configured. Error type: {type(error).__name__}"
-        )
-
-
-# --------------------------------------------------
+# ==================================================
 # MAIN DASHBOARD
-# --------------------------------------------------
+# ==================================================
 
 @st.fragment(run_every="60s" if auto_refresh else None)
 def show_dashboard():
-    if not ticker:
-        st.error("Enter a stock ticker in the sidebar.")
+
+    try:
+        raw = get_stock_data(ticker, period, interval)
+    except Exception as error:
+        st.error(f"Could not download stock data: {error}")
         return
 
-    with st.spinner(f"Loading {ticker} stock data..."):
-        try:
-            data = download_stock_data(ticker, period, interval)
-        except Exception as error:
-            st.error(
-                f"Could not download stock data. Error type: "
-                f"{type(error).__name__}"
-            )
-            return
-
-    if data.empty:
+    if raw.empty or len(raw) < 2:
         st.error(
-            f"No stock data was returned for {ticker}. "
-            "Check the ticker and try again."
+            "No usable stock data was found. Check the ticker, "
+            "internet connection, or selected interval."
         )
         return
 
-    data = calculate_indicators(data)
-    signal, reasons = get_signal(data)
+    data = add_indicators(raw)
+
+    signal, score, checks, reasons = calculate_signal(data)
     patterns = detect_patterns(data)
 
     last = data.iloc[-1]
     price = float(last["Close"])
+    previous_price = float(data["Close"].iloc[-2])
+    rsi = last["RSI"]
 
-    # ----------------------------------------------
-    # SIGNAL DISPLAY
-    # ----------------------------------------------
+    percent_change = (
+        (price / previous_price - 1) * 100
+        if previous_price != 0 else 0
+    )
 
-    signal_colors = {
-        "BUY": "#00ff66",
-        "SELL": "#ff4040",
+    # ==================================================
+    # FIXED SIGNAL DISPLAY
+    # ==================================================
+
+    colors = {
+        "BUY": "#00e676",
+        "SELL": "#ff5252",
         "HOLD": "#ffd740",
         "INSUFFICIENT DATA": "#ffffff",
     }
 
-    signal_color = signal_colors.get(signal, "#ffffff")
+    signal_color = colors.get(signal, "#ffffff")
 
+    # Native Streamlit containers avoid the old HTML black-bar issue.
     st.markdown(
         f"""
-        <div style="
-            background-color: #101820;
-            border: 3px solid {signal_color};
+        <style>
+        .signal-card {{
+            background: linear-gradient(135deg, #17212b, #243447);
+            border: 2px solid {signal_color};
             border-radius: 16px;
-            padding: 28px 16px;
+            padding: 24px 16px;
             text-align: center;
             margin: 12px 0 24px 0;
-            width: 100%;
-            box-sizing: border-box;
-        ">
-            <div style="
-                color: #ffffff;
-                font-size: 15px;
-                font-weight: bold;
-                letter-spacing: 3px;
-            ">TECHNICAL SIGNAL</div>
+        }}
+        .signal-label {{
+            color: #e0e6ed;
+            font-size: 14px;
+            font-weight: 700;
+            letter-spacing: 3px;
+        }}
+        .signal-value {{
+            color: {signal_color};
+            font-size: 48px;
+            font-weight: 900;
+            line-height: 1.3;
+            margin: 12px 0;
+            overflow-wrap: anywhere;
+        }}
+        .signal-price {{
+            color: #ffffff;
+            font-size: 22px;
+            font-weight: 700;
+        }}
+        .signal-date {{
+            color: #d0d7de;
+            font-size: 13px;
+            margin-top: 12px;
+        }}
+        </style>
 
-            <div style="
-                color: {signal_color};
-                font-size: 60px;
-                line-height: 1.2;
-                font-weight: 900;
-                margin: 14px 0;
-                text-shadow: 0 0 8px {signal_color};
-            ">{signal}</div>
-
-            <div style="
-                color: #ffffff;
-                font-size: 22px;
-                font-weight: bold;
-            ">
-                {ticker} · ${price:,.2f}
-            </div>
-
-            <div style="
-                color: #cccccc;
-                font-size: 13px;
-                margin-top: 12px;
-            ">
+        <div class="signal-card">
+            <div class="signal-label">STOCK SIGNAL</div>
+            <div class="signal-value">{signal}</div>
+            <div class="signal-price">{ticker} · ${price:,.2f}</div>
+            <div class="signal-date">
                 Latest available candle · {data.index[-1]}
             </div>
         </div>
@@ -448,34 +375,40 @@ def show_dashboard():
         unsafe_allow_html=True,
     )
 
-    # ----------------------------------------------
+    # ==================================================
     # METRICS
-    # ----------------------------------------------
+    # ==================================================
 
     col1, col2, col3, col4 = st.columns(4)
 
-    col1.metric("Latest Price", f"${price:,.2f}")
+    col1.metric(
+        "Latest Price",
+        f"${price:,.2f}",
+        f"{percent_change:+.2f}%",
+    )
 
     col2.metric(
-        "SMA 20",
-        f"${last['SMA20']:,.2f}" if pd.notna(last["SMA20"]) else "N/A",
+        "RSI (14)",
+        f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A",
     )
 
     col3.metric(
-        "SMA 50",
-        f"${last['SMA50']:,.2f}" if pd.notna(last["SMA50"]) else "N/A",
+        "SMA 20",
+        f"${float(last['SMA20']):,.2f}"
+        if pd.notna(last["SMA20"]) else "N/A",
     )
 
     col4.metric(
-        "RSI",
-        f"{last['RSI']:.2f}" if pd.notna(last["RSI"]) else "N/A",
+        "SMA 50",
+        f"${float(last['SMA50']):,.2f}"
+        if pd.notna(last["SMA50"]) else "N/A",
     )
 
-    # ----------------------------------------------
+    # ==================================================
     # CANDLESTICK CHART
-    # ----------------------------------------------
+    # ==================================================
 
-    st.subheader(f"{ticker} Price Chart")
+    st.subheader(f"🕯️ {ticker} Candlestick Chart")
 
     fig = go.Figure()
 
@@ -487,6 +420,8 @@ def show_dashboard():
             low=data["Low"],
             close=data["Close"],
             name="Price",
+            increasing_line_color="#00e676",
+            decreasing_line_color="#ff5252",
         )
     )
 
@@ -494,9 +429,9 @@ def show_dashboard():
         go.Scatter(
             x=data.index,
             y=data["SMA20"],
-            mode="lines",
             name="SMA 20",
-            line=dict(width=2),
+            mode="lines",
+            line=dict(color="#ffd740", width=2),
         )
     )
 
@@ -504,158 +439,99 @@ def show_dashboard():
         go.Scatter(
             x=data.index,
             y=data["SMA50"],
-            mode="lines",
             name="SMA 50",
-            line=dict(width=2),
+            mode="lines",
+            line=dict(color="#40c4ff", width=2),
         )
     )
 
     fig.update_layout(
-        height=550,
-        xaxis_rangeslider_visible=False,
         template="plotly_dark",
-        margin=dict(l=10, r=10, t=30, b=10),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        height=550,
+        xaxis_title="Date",
+        yaxis_title="Adjusted stock price ($)",
+        xaxis_rangeslider_visible=False,
+        hovermode="x unified",
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # ----------------------------------------------
-    # SIGNAL REASONS
-    # ----------------------------------------------
+    # ==================================================
+    # SIGNAL EXPLANATION
+    # ==================================================
 
-    st.subheader("Why This Signal?")
+    st.subheader("Why the dashboard chose this signal")
 
-    for reason in reasons:
-        st.write(f"• {reason}")
+    left, right = st.columns(2)
 
-    st.caption(
-        "The signal uses simple technical rules. It does not account for "
-        "all company news, earnings, market conditions, or your financial situation."
-    )
+    with left:
+        st.write(f"**Signal:** {signal}")
+        st.write(f"**Technical score:** {score}")
+        st.write(f"**Valid indicator checks:** {checks} of 3")
 
-    # ----------------------------------------------
-    # CANDLESTICK OBSERVATIONS
-    # ----------------------------------------------
+        for reason in reasons:
+            st.write("• " + reason)
 
-    with st.expander("Candlestick Pattern Checks"):
+    with right:
+        st.write("**Candlestick pattern checks**")
+
         for pattern in patterns:
-            st.write(f"• {pattern}")
+            st.write("• " + pattern)
 
-        st.caption(
-            "Candlestick patterns are approximate observations and can give false signals."
-        )
-
-    # ----------------------------------------------
-    # AI ANALYSIS
-    # ----------------------------------------------
-
-    st.subheader("🤖 AI Stock Analyst")
-
-    if st.button("Analyze Stock with AI", key=f"ai_{ticker}"):
-        with st.spinner("Analyzing technical data..."):
-            analysis = analyze_with_ai(
-                ticker,
-                data,
-                signal,
-                reasons,
-                patterns,
-            )
-
-        st.session_state[f"analysis_{ticker}"] = analysis
-
-    saved_analysis = st.session_state.get(f"analysis_{ticker}")
-
-    if saved_analysis:
-        st.markdown(saved_analysis)
-
-    # ----------------------------------------------
+    # ==================================================
     # WATCHLIST
-    # ----------------------------------------------
+    # ==================================================
 
     st.subheader("⭐ Watchlist")
 
-    watchlist = list(
-        dict.fromkeys(
-            item.strip().upper()
-            for item in watchlist_text.split(",")
-            if item.strip()
-        )
-    )
-
-    watchlist_rows = []
+    rows = []
 
     for symbol in watchlist:
         try:
-            if symbol == ticker:
-                watch_data = data
-            else:
-                watch_data = download_stock_data(symbol, "1mo", "1d")
+            watch_data = get_stock_data(symbol, "1mo", "1d")
 
-            if watch_data.empty:
-                watchlist_rows.append(
-                    {
-                        "Ticker": symbol,
-                        "Price": "Unavailable",
-                        "Daily Change": "N/A",
-                    }
-                )
-                continue
-
-            watch_close = watch_data["Close"].dropna()
-
-            if watch_close.empty:
-                raise ValueError("No closing prices")
-
-            current_price = float(watch_close.iloc[-1])
-
-            if len(watch_close) > 1:
-                previous_price = float(watch_close.iloc[-2])
-                change = (
-                    (current_price - previous_price)
-                    / previous_price
-                    * 100
-                    if previous_price != 0
-                    else 0
-                )
-                change_text = f"{change:+.2f}%"
-            else:
-                change_text = "N/A"
-
-            watchlist_rows.append(
-                {
-                    "Ticker": symbol,
-                    "Price": f"${current_price:,.2f}",
-                    "Daily Change": change_text,
-                }
-            )
-
-        except Exception:
-            watchlist_rows.append(
-                {
+            if watch_data.empty or len(watch_data) < 2:
+                rows.append({
                     "Ticker": symbol,
                     "Price": "Unavailable",
-                    "Daily Change": "N/A",
-                }
+                    "Daily change": "N/A",
+                })
+                continue
+
+            close = watch_data["Close"].astype(float)
+            current = float(close.iloc[-1])
+            previous = float(close.iloc[-2])
+
+            daily_change = (
+                (current / previous - 1) * 100
+                if previous != 0 else 0
             )
 
-    if watchlist_rows:
+            rows.append({
+                "Ticker": symbol,
+                "Price": f"${current:,.2f}",
+                "Daily change": f"{daily_change:+.2f}%",
+            })
+
+        except Exception:
+            rows.append({
+                "Ticker": symbol,
+                "Price": "Unavailable",
+                "Daily change": "N/A",
+            })
+
+    if rows:
         st.dataframe(
-            pd.DataFrame(watchlist_rows),
-            hide_index=True,
+            pd.DataFrame(rows),
             use_container_width=True,
+            hide_index=True,
         )
+    else:
+        st.info("Choose stocks in the sidebar to show your watchlist.")
 
     st.caption(
-        "Prices and chart intervals depend on Yahoo Finance data availability "
-       
-    st.caption(
-        "Prices and chart intervals depend on Yahoo Finance data "
-        "availability and may be delayed."
-    )
-
-
-show_dashboard() and may be delayed."
+        "Yahoo Finance data may be delayed or unavailable. "
+        "Technical signals can be wrong and do not guarantee future returns."
     )
 
 
