@@ -1,27 +1,23 @@
+
 import streamlit as st
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
-from streamlit_autorefresh import st_autorefresh
 
-# ---------------- PAGE SETTINGS ----------------
 st.set_page_config(
     page_title="Stock Signal Dashboard",
     page_icon="📈",
     layout="wide"
 )
 
-# Refresh dashboard every 60 seconds while open
-st_autorefresh(interval=60 * 1000, key="stock_refresh")
-
 st.title("📈 Stock Signal Dashboard")
-st.caption("Automatic price refresh • Rule-based stock signals")
+st.caption("Stock signals • Automatic refresh every 60 seconds while active")
 
-# ---------------- SIDEBAR ----------------
+# ---------------- SETTINGS ----------------
 st.sidebar.header("Settings")
 
-ticker_input = st.sidebar.text_input(
+ticker = st.sidebar.text_input(
     "Stock ticker",
     value="MSFT"
 ).strip().upper()
@@ -44,225 +40,191 @@ watchlist = st.sidebar.multiselect(
     default=["MSFT", "AAPL", "NVDA"]
 )
 
-if st.sidebar.button("🔄 Refresh data now"):
-    st.cache_data.clear()
-    st.rerun()
+if not ticker:
+    st.warning("Enter a stock ticker in the sidebar.")
+    st.stop()
 
-# ---------------- GET STOCK DATA ----------------
+
+# ---------------- STOCK DATA ----------------
 @st.cache_data(ttl=60)
-def get_stock_data(symbol, history_period, chart_interval):
-    data = yf.download(
+def get_stock_data(symbol, history, interval_value):
+    df = yf.download(
         symbol,
-        period=history_period,
-        interval=chart_interval,
+        period=history,
+        interval=interval_value,
         auto_adjust=True,
         progress=False
     )
 
-    if data.empty:
+    if df.empty:
         return pd.DataFrame()
 
-    # Handle yfinance MultiIndex columns
-    if isinstance(data.columns, pd.MultiIndex):
-        data.columns = data.columns.get_level_values(0)
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
 
-    data = data.loc[:, ~data.columns.duplicated()]
-    data = data.dropna(subset=["Close"])
+    df = df.loc[:, ~df.columns.duplicated()]
+    return df.dropna(subset=["Close"])
 
-    return data
 
-if not ticker_input:
-    st.error("Enter a stock ticker.")
-    st.stop()
+# ---------------- DASHBOARD ----------------
+@st.fragment(run_every="60s")
+def show_dashboard():
+    try:
+        data = get_stock_data(ticker, period, interval)
+    except Exception as e:
+        st.error(f"Could not download stock data: {e}")
+        return
 
-try:
-    data = get_stock_data(ticker_input, period, interval)
-except Exception as error:
-    st.error(f"Could not retrieve stock data: {error}")
-    st.stop()
+    if data.empty or len(data) < 2:
+        st.error(
+            "No stock data found. Check the ticker and try another interval."
+        )
+        return
 
-if data.empty or len(data) < 2:
-    st.error(
-        "No usable stock data was returned. Check the ticker, "
-        "internet connection, and selected chart interval."
+    close = data["Close"].squeeze()
+    data["SMA20"] = close.rolling(20).mean()
+    data["SMA50"] = close.rolling(50).mean()
+
+    change = close.diff()
+    gains = change.clip(lower=0)
+    losses = -change.clip(upper=0)
+
+    avg_gain = gains.rolling(14).mean()
+    avg_loss = losses.rolling(14).mean()
+
+    rs = avg_gain / avg_loss.replace(0, float("nan"))
+    data["RSI"] = (100 - (100 / (1 + rs))).fillna(50)
+
+    price = float(close.iloc[-1])
+    previous = float(close.iloc[-2])
+    percent_change = (
+        (price / previous - 1) * 100 if previous else 0
     )
-    st.stop()
 
-# ---------------- CALCULATE INDICATORS ----------------
-close = data["Close"].squeeze()
-high = data["High"].squeeze()
-low = data["Low"].squeeze()
+    rsi = float(data["RSI"].iloc[-1])
+    sma20 = data["SMA20"].iloc[-1]
+    sma50 = data["SMA50"].iloc[-1]
 
-data["SMA20"] = close.rolling(20).mean()
-data["SMA50"] = close.rolling(50).mean()
+    # -------- SIGNAL CALCULATION --------
+    score = 0
+    reasons = []
 
-change = close.diff()
-gain = change.clip(lower=0)
-loss = -change.clip(upper=0)
+    if pd.notna(sma20) and pd.notna(sma50):
+        if price > float(sma20):
+            score += 1
+            reasons.append("Price is above its 20-period average.")
+        else:
+            score -= 1
+            reasons.append("Price is below its 20-period average.")
 
-avg_gain = gain.rolling(14).mean()
-avg_loss = loss.rolling(14).mean()
-
-relative_strength = avg_gain / avg_loss.replace(0, float("nan"))
-data["RSI"] = 100 - (100 / (1 + relative_strength))
-data["RSI"] = data["RSI"].fillna(50)
-
-data["Volatility20"] = close.pct_change().rolling(20).std() * 100
-
-latest_price = float(close.iloc[-1])
-previous_price = float(close.iloc[-2])
-price_change = latest_price - previous_price
-percent_change = (
-    (latest_price / previous_price - 1) * 100
-    if previous_price else 0
-)
-
-latest_rsi = float(data["RSI"].iloc[-1])
-sma20 = data["SMA20"].iloc[-1]
-sma50 = data["SMA50"].iloc[-1]
-
-# ---------------- SIGNAL RULES ----------------
-score = 0
-reasons = []
-
-if pd.notna(sma20) and pd.notna(sma50):
-    if latest_price > sma20:
-        score += 1
-        reasons.append("Price is above its 20-period average.")
+        if float(sma20) > float(sma50):
+            score += 1
+            reasons.append("20-period average is above the 50-period average.")
+        else:
+            score -= 1
+            reasons.append("20-period average is below the 50-period average.")
     else:
-        score -= 1
-        reasons.append("Price is below its 20-period average.")
+        reasons.append("More historical data is needed for moving averages.")
 
-    if sma20 > sma50:
+    if rsi < 30:
         score += 1
-        reasons.append("20-period average is above the 50-period average.")
-    else:
+        reasons.append("RSI is below 30.")
+    elif rsi > 70:
         score -= 1
-        reasons.append("20-period average is below the 50-period average.")
-else:
-    reasons.append("Not enough history for both moving averages.")
+        reasons.append("RSI is above 70.")
+    else:
+        reasons.append("RSI is between 30 and 70.")
 
-if latest_rsi < 30:
-    score += 1
-    reasons.append("RSI is below 30, often considered oversold.")
-elif latest_rsi > 70:
-    score -= 1
-    reasons.append("RSI is above 70, often considered overbought.")
-else:
-    reasons.append("RSI is between 30 and 70.")
+    if score >= 2 and rsi < 70:
+        signal = "BUY"
+        signal_color = "#00e676"
+    elif score <= -1 or rsi >= 75:
+        signal = "SELL"
+        signal_color = "#ff5252"
+    else:
+        signal = "HOLD"
+        signal_color = "#ffd740"
 
-if score >= 2 and latest_rsi < 70:
-    signal = "BUY"
-    signal_color = "#00e676"
-elif score <= -1 or latest_rsi >= 75:
-    signal = "SELL"
-    signal_color = "#ff5252"
-else:
-    signal = "HOLD"
-    signal_color = "#ffd740"
-
-# ---------------- BLACK SIGNAL BOX ----------------
-st.markdown(
-    f"""
-    <div style="
-        background:#000000;
-        border:2px solid #333333;
-        border-radius:10px;
-        padding:30px 15px;
-        text-align:center;
-        margin:10px 0 25px 0;
-    ">
+    # -------- BLACK SIGNAL BOX --------
+    st.markdown(
+        f"""
         <div style="
-            color:#aaaaaa;
-            font-size:14px;
-            letter-spacing:4px;
-        ">CURRENT STOCK SIGNAL</div>
-        <div style="
-            color:{signal_color};
-            font-size:48px;
-            font-weight:900;
-            margin:12px 0;
-        ">{signal}</div>
-        <div style="color:#ffffff;font-size:17px;">
-            {ticker_input} · ${latest_price:,.2f}
+            background:#000000;
+            border:2px solid #333333;
+            border-radius:10px;
+            padding:28px 15px;
+            text-align:center;
+            margin:10px 0 24px 0;
+        ">
+            <div style="
+                color:#aaaaaa;
+                font-size:14px;
+                letter-spacing:4px;
+            ">STOCK SIGNAL</div>
+            <div style="
+                color:{signal_color};
+                font-size:48px;
+                font-weight:900;
+                margin:12px 0;
+            ">{signal}</div>
+            <div style="color:white;font-size:18px;">
+                {ticker} · ${price:,.2f}
+            </div>
+            <div style="color:#999999;font-size:12px;margin-top:10px;">
+                Updated {datetime.now().strftime("%I:%M:%S %p")}
+            </div>
         </div>
-        <div style="color:#999999;font-size:12px;margin-top:10px;">
-            Rule-based analysis · Updated {datetime.now().strftime("%I:%M:%S %p")}
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+        """,
+        unsafe_allow_html=True
+    )
 
-# ---------------- TOP METRICS ----------------
-col1, col2, col3, col4 = st.columns(4)
+    # -------- METRICS --------
+    c1, c2, c3, c4 = st.columns(4)
 
-col1.metric(
-    "Latest available price",
-    f"${latest_price:,.2f}",
-    f"{percent_change:+.2f}%"
-)
+    c1.metric("Latest price", f"${price:,.2f}", f"{percent_change:+.2f}%")
+    c2.metric("RSI (14)", f"{rsi:.1f}")
+    c3.metric(
+        "SMA 20",
+        f"${float(sma20):,.2f}" if pd.notna(sma20) else "N/A"
+    )
+    c4.metric(
+        "SMA 50",
+        f"${float(sma50):,.2f}" if pd.notna(sma50) else "N/A"
+    )
 
-col2.metric("RSI (14)", f"{latest_rsi:.1f}")
+    # -------- CHART --------
+    st.subheader(f"{ticker} Price Chart")
 
-col3.metric(
-    "SMA 20",
-    f"${float(sma20):,.2f}" if pd.notna(sma20) else "N/A"
-)
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(
+        x=data.index, y=close, mode="lines", name="Price"
+    ))
+    fig.add_trace(go.Scatter(
+        x=data.index, y=data["SMA20"], mode="lines", name="SMA 20"
+    ))
+    fig.add_trace(go.Scatter(
+        x=data.index, y=data["SMA50"], mode="lines", name="SMA 50"
+    ))
 
-col4.metric(
-    "SMA 50",
-    f"${float(sma50):,.2f}" if pd.notna(sma50) else "N/A"
-)
+    fig.update_layout(
+        template="plotly_dark",
+        height=480,
+        hovermode="x unified",
+        xaxis_title="Date",
+        yaxis_title="Price"
+    )
 
-# ---------------- CHART ----------------
-st.subheader(f"{ticker_input} Price Chart")
+    st.plotly_chart(fig, use_container_width=True)
 
-fig = go.Figure()
+    with st.expander("Why did the app choose this signal?"):
+        st.write(f"Signal: **{signal}**")
+        st.write(f"Indicator score: **{score}**")
+        for reason in reasons:
+            st.write(f"- {reason}")
 
-fig.add_trace(go.Scatter(
-    x=data.index,
-    y=close,
-    mode="lines",
-    name="Price"
-))
+    # -------- WATCHLIST --------
+    st.subheader("👀 Watchlist")
 
-fig.add_trace(go.Scatter(
-    x=data.index,
-    y=data["SMA20"],
-    mode="lines",
-    name="SMA 20"
-))
-
-fig.add_trace(go.Scatter(
-    x=data.index,
-    y=data["SMA50"],
-    mode="lines",
-    name="SMA 50"
-))
-
-fig.update_layout(
-    template="plotly_dark",
-    height=500,
-    xaxis_title="Date",
-    yaxis_title="Adjusted price",
-    hovermode="x unified",
-    legend_title="Indicator"
-)
-
-st.plotly_chart(fig, use_container_width=True)
-
-# ---------------- SIGNAL EXPLANATION ----------------
-with st.expander("Why did the app choose this signal?"):
-    st.write(f"**Signal:** {signal}")
-    st.write(f"**Indicator score:** {score}")
-    for reason in reasons:
-        st.write(f"- {reason}")
-
-# ---------------- WATCHLIST ----------------
-st.subheader("👀 Watchlist")
-
-if watchlist:
     rows = []
 
     for symbol in watchlist:
@@ -273,45 +235,38 @@ if watchlist:
                 rows.append({
                     "Ticker": symbol,
                     "Price": "Unavailable",
-                    "Daily Change": "N/A"
+                    "Daily change": "N/A"
                 })
                 continue
 
-            if isinstance(watch_data.columns, pd.MultiIndex):
-                watch_data.columns = watch_data.columns.get_level_values(0)
-
             watch_close = watch_data["Close"].squeeze()
-            price = float(watch_close.iloc[-1])
-            old_price = float(watch_close.iloc[-2])
-            daily_change = (price / old_price - 1) * 100 if old_price else 0
+            latest = float(watch_close.iloc[-1])
+            prior = float(watch_close.iloc[-2])
+            daily = (latest / prior - 1) * 100 if prior else 0
 
             rows.append({
                 "Ticker": symbol,
-                "Price": f"${price:,.2f}",
-                "Daily Change": f"{daily_change:+.2f}%"
+                "Price": f"${latest:,.2f}",
+                "Daily change": f"{daily:+.2f}%"
             })
 
         except Exception:
             rows.append({
                 "Ticker": symbol,
                 "Price": "Unavailable",
-                "Daily Change": "N/A"
+                "Daily change": "N/A"
             })
 
-    st.dataframe(
-        pd.DataFrame(rows),
-        use_container_width=True,
-        hide_index=True
+    if rows:
+        st.dataframe(
+            pd.DataFrame(rows),
+            use_container_width=True,
+            hide_index=True
+        )
+
+    st.caption(
+        "Signals are based on simple technical rules, not guaranteed predictions."
     )
 
-# ---------------- IMPORTANT NOTES ----------------
-st.caption(
-    "Signals are generated by simple technical rules, not a trained AI model. "
-    "They are not guaranteed predictions or personalized financial advice."
-)
 
-st.caption(
-    "Automatic refresh works while the dashboard is running and open. "
-    "It does not guarantee 24/7 background monitoring. "
-    "Yahoo Finance data can be delayed, incomplete, or unavailable."
-)
+show_dashboard()
