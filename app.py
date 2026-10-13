@@ -3,6 +3,8 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import yfinance as yf
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 # ==================================================
 # PAGE SETTINGS
@@ -24,8 +26,7 @@ st.caption("Candlestick charts • Technical signals • Watchlist")
 st.sidebar.header("Stock Settings")
 
 ticker = st.sidebar.text_input(
-    "Stock ticker",
-    value="MSFT",
+    "Stock ticker", value="MSFT"
 ).strip().upper()
 
 period = st.sidebar.selectbox(
@@ -47,8 +48,7 @@ watchlist = st.sidebar.multiselect(
 )
 
 auto_refresh = st.sidebar.toggle(
-    "Refresh every 60 seconds",
-    value=True,
+    "Refresh every 60 seconds", value=True
 )
 
 if st.sidebar.button("🔄 Refresh data now"):
@@ -58,6 +58,84 @@ if st.sidebar.button("🔄 Refresh data now"):
 if not ticker:
     st.warning("Enter a stock ticker to begin.")
     st.stop()
+
+# ==================================================
+# LIVE STOCK MARKET CLOCK
+# ==================================================
+
+@st.fragment(run_every="1s")
+def show_market_clock():
+    now = datetime.now(ZoneInfo("America/New_York"))
+
+    market_open_time = now.replace(
+        hour=9, minute=30, second=0, microsecond=0
+    )
+    market_close_time = now.replace(
+        hour=16, minute=0, second=0, microsecond=0
+    )
+
+    weekday = now.weekday() < 5
+    is_open = (
+        weekday
+        and market_open_time <= now < market_close_time
+    )
+
+    st.subheader("🕒 US Stock Market Clock")
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Current Eastern Time",
+        now.strftime("%I:%M:%S %p"),
+    )
+    col2.metric("Market Opens", "9:30 AM")
+    col3.metric("Market Closes", "4:00 PM")
+
+    if is_open:
+        st.success("🟢 MARKET OPEN")
+
+        remaining = market_close_time - now
+        seconds_left = max(0, int(remaining.total_seconds()))
+        hours, remainder = divmod(seconds_left, 3600)
+        minutes, seconds = divmod(remainder, 60)
+
+        st.write(
+            f"Time until close: {hours}h {minutes}m {seconds}s"
+        )
+
+    else:
+        st.error("🔴 MARKET CLOSED")
+
+        if weekday and now < market_open_time:
+            st.write("The regular market opens today at 9:30 AM ET.")
+        elif weekday and now >= market_close_time:
+            next_day = now + timedelta(days=1)
+            while next_day.weekday() >= 5:
+                next_day += timedelta(days=1)
+
+            st.write(
+                f"Next weekday opening: "
+                f"{next_day.strftime('%A')} at 9:30 AM ET."
+            )
+        else:
+            next_day = now + timedelta(days=1)
+            while next_day.weekday() >= 5:
+                next_day += timedelta(days=1)
+
+            st.write(
+                f"Next weekday opening: "
+                f"{next_day.strftime('%A')} at 9:30 AM ET."
+            )
+
+    st.caption(
+        "Regular NYSE/Nasdaq hours: Monday–Friday, "
+        "9:30 AM–4:00 PM Eastern. Holidays and special "
+        "early closures are not checked by this clock."
+    )
+
+show_market_clock()
+
+st.divider()
 
 # ==================================================
 # STOCK DATA
@@ -127,11 +205,10 @@ def add_indicators(df):
     rsi.loc[(avg_gain == 0) & (avg_loss == 0)] = 50
 
     df["RSI"] = rsi
-
     return df
 
 # ==================================================
-# SIGNAL CALCULATION
+# BUY / SELL / HOLD SIGNAL
 # ==================================================
 
 def calculate_signal(df):
@@ -151,7 +228,6 @@ def calculate_signal(df):
     checks = 0
     reasons = []
 
-    # Price versus SMA20
     if pd.notna(sma20):
         checks += 1
 
@@ -166,11 +242,10 @@ def calculate_signal(df):
                 "Bearish: price is below its 20-period average."
             )
         else:
-            reasons.append("Price is equal to SMA20.")
+            reasons.append("Price equals SMA20.")
     else:
         reasons.append("SMA20 is unavailable.")
 
-    # SMA20 versus SMA50
     if pd.notna(sma20) and pd.notna(sma50):
         checks += 1
 
@@ -183,9 +258,8 @@ def calculate_signal(df):
         else:
             reasons.append("SMA20 and SMA50 are equal.")
     else:
-        reasons.append("Moving averages need more historical data.")
+        reasons.append("Moving averages need more data.")
 
-    # RSI
     if pd.notna(rsi):
         rsi = float(rsi)
         checks += 1
@@ -270,10 +344,14 @@ def detect_patterns(df):
         and lower_wick <= max(body * 0.6, candle_range * 0.08)
         and body / candle_range <= 0.4
     ):
-        patterns.append("Shooting-star-like candle with a long upper wick.")
+        patterns.append(
+            "Shooting-star-like candle with a long upper wick."
+        )
 
     if not patterns:
-        patterns.append("No selected pattern detected on the latest candle.")
+        patterns.append(
+            "No selected pattern detected on the latest candle."
+        )
 
     return patterns
 
@@ -283,7 +361,6 @@ def detect_patterns(df):
 
 @st.fragment(run_every="60s" if auto_refresh else None)
 def show_dashboard():
-
     try:
         raw = get_stock_data(ticker, period, interval)
     except Exception as error:
@@ -312,9 +389,7 @@ def show_dashboard():
         if previous_price != 0 else 0
     )
 
-    # ==================================================
-    # FIXED SIGNAL DISPLAY
-    # ==================================================
+    # SIGNAL DISPLAY
 
     colors = {
         "BUY": "#00e676",
@@ -325,7 +400,6 @@ def show_dashboard():
 
     signal_color = colors.get(signal, "#ffffff")
 
-    # Native Streamlit containers avoid the old HTML black-bar issue.
     st.markdown(
         f"""
         <style>
@@ -362,7 +436,6 @@ def show_dashboard():
             margin-top: 12px;
         }}
         </style>
-
         <div class="signal-card">
             <div class="signal-label">STOCK SIGNAL</div>
             <div class="signal-value">{signal}</div>
@@ -375,9 +448,7 @@ def show_dashboard():
         unsafe_allow_html=True,
     )
 
-    # ==================================================
     # METRICS
-    # ==================================================
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -404,9 +475,7 @@ def show_dashboard():
         if pd.notna(last["SMA50"]) else "N/A",
     )
 
-    # ==================================================
     # CANDLESTICK CHART
-    # ==================================================
 
     st.subheader(f"🕯️ {ticker} Candlestick Chart")
 
@@ -456,9 +525,7 @@ def show_dashboard():
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # ==================================================
     # SIGNAL EXPLANATION
-    # ==================================================
 
     st.subheader("Why the dashboard chose this signal")
 
@@ -478,9 +545,7 @@ def show_dashboard():
         for pattern in patterns:
             st.write("• " + pattern)
 
-    # ==================================================
     # WATCHLIST
-    # ==================================================
 
     st.subheader("⭐ Watchlist")
 
@@ -536,3 +601,4 @@ def show_dashboard():
 
 
 show_dashboard()
+
