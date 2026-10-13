@@ -5,10 +5,11 @@ import streamlit as st
 import yfinance as yf
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
+from urllib.parse import urlparse
 
-# ==================================================
+# =========================================================
 # PAGE SETTINGS
-# ==================================================
+# =========================================================
 
 st.set_page_config(
     page_title="Stock Signal Dashboard",
@@ -18,41 +19,37 @@ st.set_page_config(
 
 st.title("📈 Stock Signal Dashboard")
 st.caption(
-    "Candlestick charts • Technical signals • 100+ tickers • Watchlist"
+    "Technical signals | Candlesticks | Watchlist | News | Earnings"
 )
 
-# ==================================================
-# STOCK LIST
-# ==================================================
+# =========================================================
+# STOCK OPTIONS
+# =========================================================
 
 STOCK_OPTIONS = sorted(set("""
 AAPL MSFT NVDA TSLA AMZN GOOGL GOOG META AMD INTC PLTR NFLX
 AVGO ORCL CRM JPM V MA WMT COST KO PEP DIS UBER SHOP COIN
 HOOD SOFI MSTR SMCI ARM MU QCOM ADBE CSCO IBM TSM LLY NVO
 XOM CVX BA F GM SPY QQQ DIA IWM VOO VTI SCHD JEPI JEPQ
-TSM ASML ANET PANW CRWD NOW SNOW NET DDOG MDB RBLX U
-RIVN LCID NIO XPEV LI TCEHY BABA BIDU PDD JD CPNG SE
-PYPL SQ XYZ AFRM UPST NU MELI AMZN AMAT LRCX KLAC
-MRVL TXN ADI ON NXPI SNPS CDNS INTU ACN WDAY TEAM
-ZM DOCU TWLO PATH AI C3AI IONQ RGTI QUBT ASTS RKLB
-LUNR LMT RTX NOC GD CAT DE CMI HON GE ETN PH CAT
-UNH JNJ ABBV MRK PFE BMY AMGN GILD REGN ISRG BSX
-TGT HD LOW MCD SBUX CMG YUM NKE LULU TJX ROST
-CAVA CELH MNST PM MO CL PG EL KHC MDLZ GIS
-BAC WFC C GS MS BLK SCHW CBOE ICE CME AXP DFS
-BRK-B BRK-A CVNA CAR ABNB BKNG EXPE DASH LYFT
-UPS FDX DAL UAL AAL LUV CCL RCL MAR HLT
-T FUBO VZ TMUS CMCSA CHTR PARA WBD FOXA
-PLD AMT EQIX O O REAL VICI SPG
-COP SLB OXY EOG MPC PSX KMI WMB
-RSP IVV SPLG VUG VTV ARKK ARKG XLF XLK XLE
-XLV XLI XLY XLP XLU XLRE SMH SOXX TQQQ SQQQ
-IBIT FBTC ETHA GLD SLV USO UNG TLT HYG LQD
+ASML ANET PANW CRWD NOW SNOW NET DDOG MDB RBLX U RIVN LCID
+NIO XPEV LI BABA BIDU PDD JD SE PYPL XYZ AFRM UPST NU MELI
+AMAT LRCX KLAC MRVL TXN ADI ON NXPI SNPS CDNS INTU ACN
+WDAY TEAM ZM DOCU TWLO PATH IONQ RGTI QUBT ASTS RKLB LUNR
+LMT RTX NOC GD CAT DE CMI HON GE ETN UNH JNJ ABBV MRK PFE
+AMGN GILD REGN ISRG BSX TGT HD LOW MCD SBUX CMG YUM NKE
+LULU TJX ROST CAVA CELH MNST PM MO CL PG EL MDLZ GIS
+BAC WFC C GS MS BLK SCHW CBOE ICE CME AXP DFS BRK-B
+CVNA ABNB BKNG EXPE DASH LYFT UPS FDX DAL UAL AAL LUV
+CCL RCL MAR HLT T FUBO VZ TMUS CMCSA PARA WBD FOXA
+PLD AMT EQIX REAL VICI SPG COP SLB OXY EOG MPC PSX KMI WMB
+RSP IVV SPLG VUG VTV ARKK ARKG XLF XLK XLE XLV XLI XLY
+XLP XLU XLRE SMH SOXX TQQQ SQQQ IBIT FBTC ETHA GLD SLV
+USO UNG TLT HYG LQD
 """.split()))
 
-# ==================================================
-# SIDEBAR
-# ==================================================
+# =========================================================
+# SIDEBAR SETTINGS
+# =========================================================
 
 st.sidebar.header("Stock Settings")
 
@@ -74,14 +71,14 @@ interval = st.sidebar.selectbox(
 )
 
 watchlist = st.sidebar.multiselect(
-    "Watchlist — choose multiple",
+    "Watchlist",
     options=STOCK_OPTIONS,
     default=["MSFT", "AAPL", "NVDA", "TSLA", "AMZN"],
 )
 
 custom_tickers = st.sidebar.text_input(
     "Add extra tickers",
-    placeholder="Example: MSFT, AMD, PLTR",
+    placeholder="Example: AMD, PLTR",
 )
 
 if custom_tickers.strip():
@@ -94,17 +91,17 @@ auto_refresh = st.sidebar.toggle(
     value=True,
 )
 
-if st.sidebar.button("🔄 Refresh data now"):
+if st.sidebar.button("🔄 Refresh all data"):
     st.cache_data.clear()
     st.rerun()
 
 if not ticker:
-    st.warning("Enter a stock ticker to begin.")
+    st.warning("Enter a stock ticker.")
     st.stop()
 
-# ==================================================
+# =========================================================
 # MARKET CLOCK
-# ==================================================
+# =========================================================
 
 @st.fragment(run_every="1s")
 def show_market_clock():
@@ -136,6 +133,7 @@ def show_market_clock():
         st.write(f"Time until close: {hours}h {minutes}m {seconds}s")
     else:
         st.info("🔴 REGULAR MARKET CLOSED")
+
         if weekday and now < opening:
             next_open = now
         else:
@@ -145,21 +143,21 @@ def show_market_clock():
             next_open += timedelta(days=1)
 
         st.write(
-            "Next weekday opening: "
-            f"{next_open.strftime('%A, %B %d')} at 9:30 AM ET."
+            f"Next weekday opening: {next_open.strftime('%A, %B %d')} "
+            "at 9:30 AM ET."
         )
 
     st.caption(
-        "Clock shows regular weekday hours only. "
-        "It does not check exchange holidays or early closures."
+        "Regular weekday hours only. Exchange holidays and early "
+        "closures are not checked."
     )
 
 show_market_clock()
 st.divider()
 
-# ==================================================
-# DOWNLOAD STOCK DATA
-# ==================================================
+# =========================================================
+# STOCK PRICE DATA
+# =========================================================
 
 @st.cache_data(ttl=55)
 def get_stock_data(symbol, history, candle_interval):
@@ -193,9 +191,9 @@ def get_stock_data(symbol, history, candle_interval):
     except Exception:
         return pd.DataFrame()
 
-# ==================================================
-# INDICATORS
-# ==================================================
+# =========================================================
+# TECHNICAL INDICATORS
+# =========================================================
 
 def add_indicators(df):
     df = df.copy()
@@ -209,11 +207,15 @@ def add_indicators(df):
     losses = -change.clip(upper=0)
 
     avg_gain = gains.ewm(
-        alpha=1 / 14, min_periods=14, adjust=False
+        alpha=1 / 14,
+        min_periods=14,
+        adjust=False,
     ).mean()
 
     avg_loss = losses.ewm(
-        alpha=1 / 14, min_periods=14, adjust=False
+        alpha=1 / 14,
+        min_periods=14,
+        adjust=False,
     ).mean()
 
     rs = avg_gain / avg_loss.replace(0, float("nan"))
@@ -225,9 +227,9 @@ def add_indicators(df):
 
     return df
 
-# ==================================================
-# TECHNICAL SIGNAL
-# ==================================================
+# =========================================================
+# BUY / HOLD / SELL SIGNAL
+# =========================================================
 
 def calculate_signal(df):
     if len(df) < 2:
@@ -272,6 +274,7 @@ def calculate_signal(df):
     if pd.notna(rsi):
         checks += 1
         rsi = float(rsi)
+
         if rsi < 30:
             score += 1
             reasons.append(f"RSI {rsi:.1f}: commonly considered oversold.")
@@ -294,9 +297,9 @@ def calculate_signal(df):
 
     return signal, score, checks, reasons
 
-# ==================================================
+# =========================================================
 # CANDLESTICK PATTERNS
-# ==================================================
+# =========================================================
 
 def detect_patterns(df):
     if len(df) < 2:
@@ -306,16 +309,20 @@ def detect_patterns(df):
     previous = df.iloc[-2]
 
     o, h, low, c = map(
-        float, [
+        float,
+        [
             current["Open"], current["High"],
-            current["Low"], current["Close"]
-        ]
+            current["Low"], current["Close"],
+        ],
     )
-    po, pc = float(previous["Open"]), float(previous["Close"])
+
+    po = float(previous["Open"])
+    pc = float(previous["Close"])
 
     body = abs(c - o)
     previous_body = abs(pc - po)
     candle_range = max(h - low, 1e-9)
+
     upper_wick = h - max(o, c)
     lower_wick = min(o, c) - low
 
@@ -349,16 +356,196 @@ def detect_patterns(df):
 
     return patterns or ["No selected pattern detected."]
 
-# ==================================================
-# WATCHLIST TABLE
-# ==================================================
+# =========================================================
+# NEWS DATA
+# =========================================================
+
+@st.cache_data(ttl=900)
+def get_stock_news(symbol):
+    try:
+        items = yf.Ticker(symbol).news
+        rows = []
+
+        for item in items or []:
+            content = item.get("content", item)
+
+            title = content.get("title", "Untitled news")
+            summary = content.get("summary", "")
+            publisher = content.get("publisher", "")
+
+            provider = content.get("provider")
+            if isinstance(provider, dict):
+                publisher = provider.get("displayName", publisher)
+
+            published = (
+                content.get("pubDate")
+                or content.get("displayTime")
+                or content.get("providerPublishTime")
+            )
+
+            try:
+                if isinstance(published, (int, float)):
+                    published = datetime.fromtimestamp(
+                        published, tz=ZoneInfo("UTC")
+                    ).strftime("%Y-%m-%d %H:%M UTC")
+                elif published:
+                    published = str(published)
+                else:
+                    published = "Date unavailable"
+            except Exception:
+                published = "Date unavailable"
+
+            link = content.get("link", "")
+
+            if not link:
+                canonical = content.get("canonicalUrl", {})
+                if isinstance(canonical, dict):
+                    link = canonical.get("url", "")
+
+            if not link:
+                click_url = content.get("clickThroughUrl", {})
+                if isinstance(click_url, dict):
+                    link = click_url.get("url", "")
+
+            rows.append({
+                "Headline": title,
+                "Publisher": publisher or "Publisher unavailable",
+                "Published": published,
+                "Summary": summary or "",
+                "Link": link or "",
+            })
+
+        return rows
+
+    except Exception:
+        return []
+
+def show_news(symbol):
+    st.subheader(f"📰 Latest News — {symbol}")
+
+    if st.button("🔄 Refresh news", key=f"news_{symbol}"):
+        get_stock_news.clear()
+        st.rerun()
+
+    items = get_stock_news(symbol)
+
+    if not items:
+        st.info(
+            "No news was returned. Try refreshing or check a "
+            "financial news website."
+        )
+        return
+
+    for article in items:
+        with st.container(border=True):
+            st.markdown(f"**{article['Headline']}**")
+            st.caption(
+                f"{article['Publisher']} • {article['Published']}"
+            )
+
+            if article["Summary"]:
+                st.write(article["Summary"])
+
+            link = article["Link"]
+
+            if link and urlparse(link).scheme in ("https", "http"):
+                st.markdown(f"[Read full article]({link})")
+
+# =========================================================
+# EARNINGS CALENDAR
+# =========================================================
+
+@st.cache_data(ttl=3600)
+def get_earnings_data(symbol):
+    try:
+        stock = yf.Ticker(symbol)
+        earnings = stock.get_earnings_dates(limit=12)
+
+        if earnings is None or earnings.empty:
+            return pd.DataFrame()
+
+        rows = []
+
+        for date, row in earnings.iterrows():
+            eps_estimate = row.get("EPS Estimate")
+            reported_eps = row.get("Reported EPS")
+            surprise = row.get("Surprise(%)")
+
+            rows.append({
+                "Date": str(date),
+                "EPS Estimate": (
+                    round(float(eps_estimate), 3)
+                    if pd.notna(eps_estimate) else None
+                ),
+                "Reported EPS": (
+                    round(float(reported_eps), 3)
+                    if pd.notna(reported_eps) else None
+                ),
+                "Surprise (%)": (
+                    round(float(surprise), 2)
+                    if pd.notna(surprise) else None
+                ),
+            })
+
+        return pd.DataFrame(rows)
+
+    except Exception:
+        return pd.DataFrame()
+
+def show_earnings(symbol):
+    st.subheader(f"📅 Earnings Calendar — {symbol}")
+
+    if st.button("🔄 Refresh earnings", key=f"earnings_{symbol}"):
+        get_earnings_data.clear()
+        st.rerun()
+
+    df = get_earnings_data(symbol)
+
+    if df.empty:
+        st.info(
+            "No earnings dates were returned for this ticker. "
+            "Check the company's investor-relations website."
+        )
+        return
+
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True)
+    now = pd.Timestamp.now(tz="UTC")
+
+    upcoming = df[df["Date"].notna() & (df["Date"] >= now)].copy()
+    past = df[df["Date"].notna() & (df["Date"] < now)].copy()
+
+    if not upcoming.empty:
+        st.markdown("**Upcoming / future earnings dates**")
+        upcoming["Date"] = upcoming["Date"].dt.strftime(
+            "%Y-%m-%d %H:%M UTC"
+        )
+        st.dataframe(upcoming, use_container_width=True, hide_index=True)
+    else:
+        st.info(
+            "No future earnings dates were returned. "
+            "This does not mean the company has no upcoming earnings."
+        )
+
+    if not past.empty:
+        st.markdown("**Previously listed earnings dates**")
+        past = past.sort_values("Date", ascending=False).head(8)
+        past["Date"] = past["Date"].dt.strftime("%Y-%m-%d %H:%M UTC")
+        st.dataframe(past, use_container_width=True, hide_index=True)
+
+    st.caption(
+        "EPS means earnings per share. Estimates and dates may change."
+    )
+
+# =========================================================
+# WATCHLIST
+# =========================================================
 
 @st.fragment(run_every="60s" if auto_refresh else None)
 def show_watchlist():
-    st.subheader("⭐ Watchlist — All Selected Stocks")
+    st.subheader("⭐ Watchlist")
 
     if not watchlist:
-        st.info("Select stocks from the sidebar.")
+        st.info("Select stocks in the sidebar.")
         return
 
     rows = []
@@ -367,7 +554,6 @@ def show_watchlist():
 
     for i, symbol in enumerate(watchlist):
         status.caption(f"Loading {symbol} ({i + 1}/{len(watchlist)})")
-
         df = get_stock_data(symbol, "3mo", "1d")
 
         if df.empty or len(df) < 2:
@@ -380,7 +566,7 @@ def show_watchlist():
             })
         else:
             data = add_indicators(df)
-            signal, score, checks, _ = calculate_signal(data)
+            signal, _, _, _ = calculate_signal(data)
 
             current = float(data["Close"].iloc[-1])
             previous = float(data["Close"].iloc[-2])
@@ -399,8 +585,8 @@ def show_watchlist():
 
         progress.progress((i + 1) / len(watchlist))
 
-    status.empty()
     progress.empty()
+    status.empty()
 
     st.dataframe(
         pd.DataFrame(rows),
@@ -410,16 +596,15 @@ def show_watchlist():
 
     st.caption(
         "Daily change compares the latest two available daily candles. "
-        "Prices and signals may be delayed."
+        "Data may be delayed."
     )
 
 show_watchlist()
-
 st.divider()
 
-# ==================================================
-# MAIN STOCK CHART
-# ==================================================
+# =========================================================
+# MAIN CHART
+# =========================================================
 
 @st.fragment(run_every="60s" if auto_refresh else None)
 def show_main_chart():
@@ -429,8 +614,8 @@ def show_main_chart():
 
     if raw.empty or len(raw) < 2:
         st.error(
-            "No usable data found. Check the ticker, internet connection, "
-            "or chart interval."
+            "No usable data found. Check the ticker, connection, "
+            "or selected candle interval."
         )
         return
 
@@ -445,6 +630,7 @@ def show_main_chart():
     rsi = last["RSI"]
 
     c1, c2, c3, c4 = st.columns(4)
+
     c1.metric("Latest Price", f"${price:,.2f}", f"{change_pct:+.2f}%")
     c2.metric("Technical Signal", signal)
     c3.metric("RSI (14)", f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A")
@@ -501,17 +687,17 @@ def show_main_chart():
         st.write("• " + reason)
 
     st.subheader("Candlestick Pattern Checks")
+
     for pattern in patterns:
         st.write("• " + pattern)
 
-    # RSI chart
     st.subheader("RSI (14) Chart")
+
     rsi_fig = go.Figure()
     rsi_fig.add_trace(go.Scatter(
         x=data.index,
         y=data["RSI"],
         name="RSI",
-        line=dict(width=2),
     ))
     rsi_fig.add_hline(y=70, line_dash="dash", line_color="red")
     rsi_fig.add_hline(y=30, line_dash="dash", line_color="green")
@@ -520,14 +706,37 @@ def show_main_chart():
         height=260,
         yaxis=dict(range=[0, 100]),
     )
+
     st.plotly_chart(rsi_fig, use_container_width=True)
 
 show_main_chart()
+st.divider()
+
+# =========================================================
+# NEWS AND EARNINGS CENTER
+# =========================================================
+
+st.header("📰 News & Earnings Center")
+
+news_tab, earnings_tab = st.tabs([
+    "📰 Stock News",
+    "📅 Earnings Calendar",
+])
+
+with news_tab:
+    show_news(ticker)
+
+with earnings_tab:
+    show_earnings(ticker)
+
+# =========================================================
+# FOOTER
+# =========================================================
 
 st.divider()
 st.caption(
-    "Educational technical-analysis tool, not financial advice. "
-    "BUY/HOLD/SELL labels are rule-based indicators, not reliable "
-    "predictions or guarantees of future returns. Verify prices with "
-    "your broker before making financial decisions."
+    "Educational tool, not financial advice. Technical signals are not "
+    "guaranteed predictions. Yahoo Finance data may be delayed or "
+    "incomplete. Verify news, earnings dates, and prices with official "
+    "sources before making financial decisions."
 )
