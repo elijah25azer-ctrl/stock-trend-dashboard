@@ -648,7 +648,14 @@ def show_dashboard():
 
     st.caption(
         "Prices and chart intervals depend on Yahoo Finance data availability "
-        and may be delayed."
+       
+    st.caption(
+        "Prices and chart intervals depend on Yahoo Finance data "
+        "availability and may be delayed."
+    )
+
+
+show_dashboard() and may be delayed."
     )
 
 
