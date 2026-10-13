@@ -86,7 +86,7 @@ if custom_tickers.strip():
             watchlist.append(symbol)
 
 auto_refresh = st.sidebar.toggle(
-    "Refresh every 60 seconds",
+    "Refresh every 15 seconds",
     value=True,
 )
 
