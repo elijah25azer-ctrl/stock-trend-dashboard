@@ -676,14 +676,54 @@ INDEX_BAR_CSS = """
 # LIVE STOCK BAR (MSFT, AAPL, NVDA, TSLA, AMZN)
 # =========================================================
 
-# (symbol, company, logo background, logo text color)
-TOP_STOCKS = [
-    ("MSFT", "Microsoft", "#00a4ef", "#ffffff"),
-    ("AAPL", "Apple", "#a2aaad", "#111111"),
-    ("NVDA", "NVIDIA", "#76b900", "#111111"),
-    ("TSLA", "Tesla", "#cc0000", "#ffffff"),
-    ("AMZN", "Amazon", "#ff9900", "#111111"),
-]
+DEFAULT_TOP_STOCKS = ["MSFT", "AAPL", "NVDA", "TSLA", "AMZN"]
+
+KNOWN_NAMES = {
+    "MSFT": "Microsoft", "AAPL": "Apple", "NVDA": "NVIDIA",
+    "TSLA": "Tesla", "AMZN": "Amazon",
+}
+
+# logo background, logo text color
+KNOWN_STYLES = {
+    "MSFT": ("#00a4ef", "#ffffff"),
+    "AAPL": ("#a2aaad", "#111111"),
+    "NVDA": ("#76b900", "#111111"),
+    "TSLA": ("#cc0000", "#ffffff"),
+    "AMZN": ("#ff9900", "#111111"),
+}
+
+def parse_stock_list(text):
+    out = []
+    for item in (text or "").upper().replace(" ", "").split(","):
+        if item and item not in out:
+            out.append(item)
+    return out[:5]
+
+# The 5 stocks in the top bar. Saved in the page URL (?stocks=...) so your
+# choices survive a browser refresh and can be bookmarked.
+if "top_stocks" not in st.session_state:
+    saved = parse_stock_list(st.query_params.get("stocks", ""))
+    if saved:
+        filler = [d for d in DEFAULT_TOP_STOCKS if d not in saved]
+        st.session_state["top_stocks"] = (saved + filler)[:5]
+    else:
+        st.session_state["top_stocks"] = list(DEFAULT_TOP_STOCKS)
+
+@st.cache_data(ttl=86400)
+def get_company_name(symbol):
+    if symbol in KNOWN_NAMES:
+        return KNOWN_NAMES[symbol]
+    try:
+        info = yf.Ticker(symbol).info
+        return info.get("shortName") or info.get("longName") or symbol
+    except Exception:
+        return symbol
+
+def logo_colors(symbol):
+    if symbol in KNOWN_STYLES:
+        return KNOWN_STYLES[symbol]
+    hue = (sum(ord(ch) for ch in symbol) * 37) % 360
+    return f"hsl({hue},65%,45%)", "#ffffff"
 
 @st.cache_data(ttl=600)
 def get_daily_closes(symbol):
@@ -721,8 +761,10 @@ def get_quote(symbol):
 def show_stock_bar():
     cards = []
 
-    for symbol, company, bg, fg in TOP_STOCKS:
+    for symbol in st.session_state["top_stocks"]:
         quote = get_quote(symbol)
+        bg, fg = logo_colors(symbol)
+        company = get_company_name(symbol)[:20]
 
         if quote is None:
             price_txt, chg_txt, badge_txt, cls = "N/A", "", "–", "idx-flat"
@@ -738,7 +780,7 @@ def show_stock_bar():
         cards.append(
             '<div class="idx-card">'
             f'<div class="idx-logo" style="background:{bg};color:{fg};">'
-            f'{htmllib.escape(symbol)}</div>'
+            f'{htmllib.escape(symbol[:5])}</div>'
             '<div>'
             f'<div class="idx-name">{htmllib.escape(company)}</div>'
             f'<div class="idx-price">{price_txt}</div>'
@@ -762,6 +804,36 @@ def show_stock_bar():
 
 with stock_bar_slot:
     show_stock_bar()
+
+    # Change buttons live OUTSIDE the auto-refreshing fragment so the pop-up
+    # does not close while you are typing.
+    current_stocks = st.session_state["top_stocks"]
+    edit_cols = st.columns(len(current_stocks))
+
+    for i, (col, current) in enumerate(zip(edit_cols, current_stocks)):
+        with col:
+            with st.popover(f"✏️ Change {current}", use_container_width=True):
+                new_symbol = st.text_input(
+                    "New ticker",
+                    key=f"new_ticker_{i}_{current}",
+                    placeholder="Example: AMD",
+                )
+
+                if st.button("Apply", key=f"apply_ticker_{i}_{current}"):
+                    sym = new_symbol.strip().upper()
+
+                    if not sym:
+                        st.warning("Type a ticker first.")
+                    elif sym in current_stocks:
+                        st.warning(f"{sym} is already in the bar.")
+                    elif get_quote(sym) is None:
+                        st.error(f"No data found for {sym}. Check the ticker.")
+                    else:
+                        st.session_state["top_stocks"][i] = sym
+                        st.query_params["stocks"] = ",".join(
+                            st.session_state["top_stocks"]
+                        )
+                        st.rerun()
 
 # =========================================================
 # WATCHLIST
