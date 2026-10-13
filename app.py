@@ -158,7 +158,7 @@ st.divider()
 # STOCK PRICE DATA
 # =========================================================
 
-@st.cache_data(ttl=55)
+@st.cache_data(ttl=4)
 def get_stock_data(symbol, history, candle_interval):
     try:
         df = yf.download(
@@ -683,7 +683,7 @@ st.divider()
 # MAIN CHART
 # =========================================================
 
-@st.fragment(run_every="60s" if auto_refresh else None)
+@st.fragment(run_every="15s" if auto_refresh else None)
 def show_main_chart():
     st.subheader(f"📊 Main Stock: {ticker}")
 
