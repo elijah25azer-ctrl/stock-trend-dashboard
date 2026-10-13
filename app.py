@@ -1,4 +1,5 @@
 
+
 import os
 from datetime import datetime
 
@@ -627,16 +628,4 @@ def show_dashboard():
 
 
 show_dashboard()
-<div style="background-color:#10251a; padding:20px; border-radius:12px; text-align:center; margin:12px 0;">
-  <div style="color:#00ff66; font-size:48px; font-weight:bold; display:block; visibility:visible;">
-    BUY
-  </div>
-  <div style="color:white; font-size:20px; margin-top:8px;">
-    MSFT · $541.15
-  </div>
-  <div style="color:#cccccc; font-size:13px; margin-top:10px;">
-    Latest available candle · 2026-10-12
-  </div>
-</div>
-
 
