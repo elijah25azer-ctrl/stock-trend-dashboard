@@ -1,4 +1,3 @@
-
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -452,89 +451,167 @@ def show_news(symbol):
                 st.markdown(f"[Read full article]({link})")
 
 # =========================================================
-# EARNINGS CALENDAR
+# EARNINGS & FINANCIAL RESULTS
 # =========================================================
 
 @st.cache_data(ttl=3600)
 def get_earnings_data(symbol):
+    """Get quarterly financial results and reported EPS history."""
     try:
         stock = yf.Ticker(symbol)
-        earnings = stock.get_earnings_dates(limit=12)
 
-        if earnings is None or earnings.empty:
-            return pd.DataFrame()
+        # Quarterly income statement
+        income = stock.quarterly_income_stmt
+        financial_rows = []
 
-        rows = []
+        if income is not None and not income.empty:
+            available_rows = {
+                str(index).lower(): index for index in income.index
+            }
 
-        for date, row in earnings.iterrows():
-            eps_estimate = row.get("EPS Estimate")
-            reported_eps = row.get("Reported EPS")
-            surprise = row.get("Surprise(%)")
+            def find_row(*names):
+                for name in names:
+                    key = name.lower()
+                    if key in available_rows:
+                        return available_rows[key]
+                return None
 
-            rows.append({
-                "Date": str(date),
-                "EPS Estimate": (
-                    round(float(eps_estimate), 3)
-                    if pd.notna(eps_estimate) else None
-                ),
-                "Reported EPS": (
-                    round(float(reported_eps), 3)
-                    if pd.notna(reported_eps) else None
-                ),
-                "Surprise (%)": (
-                    round(float(surprise), 2)
-                    if pd.notna(surprise) else None
-                ),
-            })
+            revenue_row = find_row("Total Revenue", "Operating Revenue")
+            income_row = find_row("Net Income", "Net Income Common Stockholders")
+            eps_row = find_row("Diluted EPS", "Basic EPS")
+            operating_row = find_row("Operating Income")
 
-        return pd.DataFrame(rows)
+            for date in income.columns:
+                def get_value(row):
+                    if row is None:
+                        return None
+                    value = income.loc[row, date]
+                    if pd.isna(value):
+                        return None
+                    return float(value)
+
+                financial_rows.append({
+                    "Quarter End": str(pd.Timestamp(date).date()),
+                    "Revenue ($)": get_value(revenue_row),
+                    "Net Income ($)": get_value(income_row),
+                    "Operating Income ($)": get_value(operating_row),
+                    "EPS ($/share)": get_value(eps_row),
+                })
+
+        financials = pd.DataFrame(financial_rows)
+
+        # Earnings estimates and reported EPS
+        earnings_rows = []
+        try:
+            earnings = stock.get_earnings_dates(limit=12)
+
+            if earnings is not None and not earnings.empty:
+                for date, row in earnings.iterrows():
+                    estimate = row.get("EPS Estimate")
+                    actual = row.get("Reported EPS")
+                    surprise = row.get("Surprise(%)")
+
+                    earnings_rows.append({
+                        "Earnings Date": str(date),
+                        "EPS Estimate ($)": (
+                            float(estimate)
+                            if pd.notna(estimate) else None
+                        ),
+                        "Reported EPS ($)": (
+                            float(actual)
+                            if pd.notna(actual) else None
+                        ),
+                        "Surprise (%)": (
+                            float(surprise)
+                            if pd.notna(surprise) else None
+                        ),
+                    })
+        except Exception:
+            pass
+
+        return financials, pd.DataFrame(earnings_rows)
 
     except Exception:
-        return pd.DataFrame()
+        return pd.DataFrame(), pd.DataFrame()
+
 
 def show_earnings(symbol):
-    st.subheader(f"📅 Earnings Calendar — {symbol}")
+    st.subheader(f"💰 {symbol} — Earnings & Financial Results")
 
     if st.button("🔄 Refresh earnings", key=f"earnings_{symbol}"):
         get_earnings_data.clear()
         st.rerun()
 
-    df = get_earnings_data(symbol)
+    financials, earnings = get_earnings_data(symbol)
 
-    if df.empty:
+    # Latest reported financial results
+    st.markdown("### Latest Quarterly Financial Results")
+
+    if financials.empty:
         st.info(
-            "No earnings dates were returned for this ticker. "
-            "Check the company's investor-relations website."
+            "Quarterly financial statements aren't available "
+            "for this ticker right now."
         )
-        return
-
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True)
-    now = pd.Timestamp.now(tz="UTC")
-
-    upcoming = df[df["Date"].notna() & (df["Date"] >= now)].copy()
-    past = df[df["Date"].notna() & (df["Date"] < now)].copy()
-
-    if not upcoming.empty:
-        st.markdown("**Upcoming / future earnings dates**")
-        upcoming["Date"] = upcoming["Date"].dt.strftime(
-            "%Y-%m-%d %H:%M UTC"
-        )
-        st.dataframe(upcoming, use_container_width=True, hide_index=True)
     else:
-        st.info(
-            "No future earnings dates were returned. "
-            "This does not mean the company has no upcoming earnings."
+        latest = financials.iloc[0]
+
+        def money(value):
+            if value is None or pd.isna(value):
+                return "N/A"
+            return f"${value:,.0f}"
+
+        def eps_money(value):
+            if value is None or pd.isna(value):
+                return "N/A"
+            return f"${value:,.2f}"
+
+        st.caption(f"Quarter ending: {latest['Quarter End']}")
+
+        c1, c2 = st.columns(2)
+        c1.metric("Revenue", money(latest["Revenue ($)"]))
+        c2.metric("Net Income", money(latest["Net Income ($)"]))
+
+        c3, c4 = st.columns(2)
+        c3.metric(
+            "Operating Income",
+            money(latest["Operating Income ($)"])
+        )
+        c4.metric(
+            "Diluted EPS",
+            eps_money(latest["EPS ($/share)"])
         )
 
-    if not past.empty:
-        st.markdown("**Previously listed earnings dates**")
-        past = past.sort_values("Date", ascending=False).head(8)
-        past["Date"] = past["Date"].dt.strftime("%Y-%m-%d %H:%M UTC")
-        st.dataframe(past, use_container_width=True, hide_index=True)
+        st.caption(
+            "Revenue is money brought in. Net income is profit after "
+            "expenses. Values are reported in US dollars where applicable."
+        )
 
-    st.caption(
-        "EPS means earnings per share. Estimates and dates may change."
-    )
+        st.markdown("### Previous Quarterly Results")
+        st.dataframe(
+            financials,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    # Earnings estimates compared with actual reported EPS
+    st.markdown("### 📊 Earnings: Estimate vs. Actual")
+
+    if earnings.empty:
+        st.info(
+            "EPS estimates and reported earnings history aren't "
+            "available right now."
+        )
+    else:
+        st.dataframe(
+            earnings,
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        st.caption(
+            "EPS means earnings per share. Surprise percentages are "
+            "provided by the data source and may be unavailable."
+        )
 
 # =========================================================
 # WATCHLIST
@@ -720,7 +797,7 @@ st.header("📰 News & Earnings Center")
 
 news_tab, earnings_tab = st.tabs([
     "📰 Stock News",
-    "📅 Earnings Calendar",
+    "💰 Earnings & Financials",
 ])
 
 with news_tab:
