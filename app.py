@@ -1,5 +1,6 @@
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 from datetime import datetime, timedelta
@@ -86,8 +87,13 @@ if custom_tickers.strip():
             watchlist.append(symbol)
 
 auto_refresh = st.sidebar.toggle(
-    "Refresh every 15 seconds",
+    "Refresh every 60 seconds",
     value=True,
+)
+
+show_sma = st.sidebar.toggle(
+    "Show SMA 20 / 50 lines",
+    value=False,
 )
 
 if st.sidebar.button("🔄 Refresh all data"):
@@ -719,7 +725,17 @@ def show_main_chart():
 
     st.caption(f"Latest available candle: {data.index[-1]}")
 
-    fig = go.Figure()
+    UP_COLOR = "#238a23"    # green candles
+    DOWN_COLOR = "#d6404f"  # red candles
+
+    has_volume = "Volume" in data.columns
+    fig = make_subplots(
+        rows=2 if has_volume else 1,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.0,
+        row_heights=[0.84, 0.16] if has_volume else [1.0],
+    )
 
     fig.add_trace(go.Candlestick(
         x=data.index,
@@ -728,31 +744,73 @@ def show_main_chart():
         low=data["Low"],
         close=data["Close"],
         name="Price",
-        increasing_line_color="#00e676",
-        decreasing_line_color="#ff5252",
-    ))
+        increasing=dict(line=dict(color=UP_COLOR, width=1), fillcolor=UP_COLOR),
+        decreasing=dict(line=dict(color=DOWN_COLOR, width=1), fillcolor=DOWN_COLOR),
+        whiskerwidth=0,
+    ), row=1, col=1)
 
-    fig.add_trace(go.Scatter(
-        x=data.index,
-        y=data["SMA20"],
-        name="SMA 20",
-        line=dict(color="#ffd740", width=2),
-    ))
+    if show_sma:
+        fig.add_trace(go.Scatter(
+            x=data.index,
+            y=data["SMA20"],
+            name="SMA 20",
+            line=dict(color="#f5a623", width=1.2),
+        ), row=1, col=1)
 
-    fig.add_trace(go.Scatter(
-        x=data.index,
-        y=data["SMA50"],
-        name="SMA 50",
-        line=dict(color="#40c4ff", width=2),
-    ))
+        fig.add_trace(go.Scatter(
+            x=data.index,
+            y=data["SMA50"],
+            name="SMA 50",
+            line=dict(color="#4a90e2", width=1.2),
+        ), row=1, col=1)
+
+    if has_volume:
+        vol_colors = [
+            UP_COLOR if c >= o else DOWN_COLOR
+            for o, c in zip(data["Open"], data["Close"])
+        ]
+        fig.add_trace(go.Bar(
+            x=data.index,
+            y=data["Volume"],
+            name="Volume",
+            marker=dict(color=vol_colors, line=dict(width=0)),
+            opacity=0.55,
+            showlegend=False,
+        ), row=2, col=1)
+        fig.update_yaxes(visible=False, row=2, col=1)
+
+    # Hide weekends (and overnight for intraday candles) so there are no gaps
+    breaks = [dict(bounds=["sat", "mon"])]
+    if interval != "1d":
+        breaks.append(dict(bounds=[16, 9.5], pattern="hour"))
+
+    fig.update_xaxes(
+        rangebreaks=breaks,
+        showgrid=False,
+        rangeslider_visible=False,
+        showline=True,
+        linecolor="#dddddd",
+    )
+
+    fig.update_yaxes(
+        side="right",
+        showgrid=True,
+        gridcolor="#eeeeee",
+        zeroline=False,
+        tickformat=",.2f",
+        row=1, col=1,
+    )
 
     fig.update_layout(
-        template="plotly_dark",
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color="#333333"),
         height=550,
-        xaxis_title="Date",
-        yaxis_title="Adjusted price ($)",
+        margin=dict(l=20, r=20, t=20, b=20),
         xaxis_rangeslider_visible=False,
         hovermode="x unified",
+        legend=dict(orientation="h", y=1.02, x=0),
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -779,9 +837,14 @@ def show_main_chart():
     rsi_fig.add_hline(y=70, line_dash="dash", line_color="red")
     rsi_fig.add_hline(y=30, line_dash="dash", line_color="green")
     rsi_fig.update_layout(
-        template="plotly_dark",
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color="#333333"),
         height=260,
-        yaxis=dict(range=[0, 100]),
+        margin=dict(l=20, r=20, t=20, b=20),
+        yaxis=dict(range=[0, 100], side="right", gridcolor="#eeeeee"),
+        xaxis=dict(showgrid=False),
     )
 
     st.plotly_chart(rsi_fig, use_container_width=True)
