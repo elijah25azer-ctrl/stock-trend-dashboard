@@ -18,10 +18,9 @@ st.set_page_config(
     layout="wide",
 )
 
-# Live stock bar and market index bar are rendered into these slots
-# (the code that fills them is defined further down)
+# Live stock bar is rendered into this slot
+# (the code that fills it is defined further down)
 stock_bar_slot = st.container()
-index_bar_slot = st.container()
 
 st.title("📈 Stock Signal Dashboard")
 st.caption(
@@ -99,7 +98,7 @@ if custom_tickers.strip():
             watchlist.append(symbol)
 
 auto_refresh = st.sidebar.toggle(
-    "Refresh every 60 seconds",
+    "Auto-refresh live data",
     value=True,
 )
 
@@ -632,17 +631,8 @@ def show_earnings(symbol):
         )
 
 # =========================================================
-# MARKET INDEX BAR (TOP OF PAGE)
+# BAR STYLING (used by the live stock bar)
 # =========================================================
-
-# (name, Yahoo symbol, logo text, logo background, logo text color)
-INDEX_ITEMS = [
-    ("Nasdaq", "^IXIC", "NQ", "#1a8fd1", "#ffffff"),
-    ("S&P 500", "^GSPC", "S&P", "#d6112b", "#ffffff"),
-    ("Dow Jones", "^DJI", "DJ", "#1fa3e0", "#ffffff"),
-    ("FTSE 100", "^FTSE", "FTSE", "#ffffff", "#1a2a6c"),
-    ("Nikkei 225", "^N225", "N225", "#ffffff", "#c8102e"),
-]
 
 INDEX_BAR_CSS = """
 <style>
@@ -681,47 +671,6 @@ INDEX_BAR_CSS = """
 </style>
 """
 
-@st.fragment(run_every="30s" if auto_refresh else None)
-def show_index_bar():
-    cards = []
-
-    for name, symbol, short, bg, fg in INDEX_ITEMS:
-        df = get_stock_data(symbol, "3mo", "1d")
-
-        if df.empty or len(df) < 2:
-            price_txt, chg_txt, badge_txt, cls = "N/A", "", "–", "idx-flat"
-        else:
-            data = add_indicators(df)
-            current = float(data["Close"].iloc[-1])
-            previous = float(data["Close"].iloc[-2])
-            pct = (current / previous - 1) * 100 if previous else 0
-            rsi = data["RSI"].iloc[-1]
-
-            price_txt = f"{current:,.2f}"
-            chg_txt = f"{pct:+.2f}%"
-            badge_txt = f"{float(rsi):.0f}" if pd.notna(rsi) else "–"
-            cls = "idx-up" if pct >= 0 else "idx-down"
-
-        cards.append(
-            '<div class="idx-card">'
-            f'<div class="idx-logo" style="background:{bg};color:{fg};">'
-            f'{htmllib.escape(short)}</div>'
-            '<div>'
-            f'<div class="idx-name">{htmllib.escape(name)}</div>'
-            f'<div class="idx-price">{price_txt}'
-            f'<span class="idx-chg {cls}">{chg_txt}</span></div>'
-            '</div>'
-            f'<div class="idx-badge {cls}">◔ {badge_txt}</div>'
-            '</div>'
-        )
-
-    st.markdown(
-        INDEX_BAR_CSS + '<div class="idx-wrap">' + "".join(cards) + '</div>',
-        unsafe_allow_html=True,
-    )
-
-with index_bar_slot:
-    show_index_bar()
 
 # =========================================================
 # LIVE STOCK BAR (MSFT, AAPL, NVDA, TSLA, AMZN)
