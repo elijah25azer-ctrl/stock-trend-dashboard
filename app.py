@@ -17,7 +17,38 @@ st.set_page_config(
 )
 
 st.title("📈 Stock Signal Dashboard")
-st.caption("Candlestick charts • Technical signals • Watchlist")
+st.caption(
+    "Candlestick charts • Technical signals • 100+ tickers • Watchlist"
+)
+
+# ==================================================
+# STOCK LIST
+# ==================================================
+
+STOCK_OPTIONS = sorted(set("""
+AAPL MSFT NVDA TSLA AMZN GOOGL GOOG META AMD INTC PLTR NFLX
+AVGO ORCL CRM JPM V MA WMT COST KO PEP DIS UBER SHOP COIN
+HOOD SOFI MSTR SMCI ARM MU QCOM ADBE CSCO IBM TSM LLY NVO
+XOM CVX BA F GM SPY QQQ DIA IWM VOO VTI SCHD JEPI JEPQ
+TSM ASML ANET PANW CRWD NOW SNOW NET DDOG MDB RBLX U
+RIVN LCID NIO XPEV LI TCEHY BABA BIDU PDD JD CPNG SE
+PYPL SQ XYZ AFRM UPST NU MELI AMZN AMAT LRCX KLAC
+MRVL TXN ADI ON NXPI SNPS CDNS INTU ACN WDAY TEAM
+ZM DOCU TWLO PATH AI C3AI IONQ RGTI QUBT ASTS RKLB
+LUNR LMT RTX NOC GD CAT DE CMI HON GE ETN PH CAT
+UNH JNJ ABBV MRK PFE BMY AMGN GILD REGN ISRG BSX
+TGT HD LOW MCD SBUX CMG YUM NKE LULU TJX ROST
+CAVA CELH MNST PM MO CL PG EL KHC MDLZ GIS
+BAC WFC C GS MS BLK SCHW CBOE ICE CME AXP DFS
+BRK-B BRK-A CVNA CAR ABNB BKNG EXPE DASH LYFT
+UPS FDX DAL UAL AAL LUV CCL RCL MAR HLT
+T FUBO VZ TMUS CMCSA CHTR PARA WBD FOXA
+PLD AMT EQIX O O REAL VICI SPG
+COP SLB OXY EOG MPC PSX KMI WMB
+RSP IVV SPLG VUG VTV ARKK ARKG XLF XLK XLE
+XLV XLI XLY XLP XLU XLRE SMH SOXX TQQQ SQQQ
+IBIT FBTC ETHA GLD SLV USO UNG TLT HYG LQD
+""".split()))
 
 # ==================================================
 # SIDEBAR
@@ -26,29 +57,41 @@ st.caption("Candlestick charts • Technical signals • Watchlist")
 st.sidebar.header("Stock Settings")
 
 ticker = st.sidebar.text_input(
-    "Stock ticker", value="MSFT"
+    "Main chart ticker",
+    value="MSFT",
 ).strip().upper()
 
 period = st.sidebar.selectbox(
     "Chart history",
-    ["1mo", "3mo", "6mo", "1y", "2y"],
+    ["1mo", "3mo", "6mo", "1y", "2y", "5y"],
     index=2,
 )
 
 interval = st.sidebar.selectbox(
     "Candle interval",
-    ["1d", "1h", "30m", "15m"],
+    ["1d", "1h", "30m", "15m", "5m"],
     index=0,
 )
 
 watchlist = st.sidebar.multiselect(
-    "Watchlist",
-    ["MSFT", "AAPL", "NVDA", "TSLA", "AMZN", "GOOGL", "META"],
-    default=["MSFT", "AAPL", "NVDA"],
+    "Watchlist — choose multiple",
+    options=STOCK_OPTIONS,
+    default=["MSFT", "AAPL", "NVDA", "TSLA", "AMZN"],
 )
 
+custom_tickers = st.sidebar.text_input(
+    "Add extra tickers",
+    placeholder="Example: MSFT, AMD, PLTR",
+)
+
+if custom_tickers.strip():
+    for symbol in custom_tickers.upper().replace(" ", "").split(","):
+        if symbol and symbol not in watchlist:
+            watchlist.append(symbol)
+
 auto_refresh = st.sidebar.toggle(
-    "Refresh every 60 seconds", value=True
+    "Refresh every 60 seconds",
+    value=True,
 )
 
 if st.sidebar.button("🔄 Refresh data now"):
@@ -60,118 +103,98 @@ if not ticker:
     st.stop()
 
 # ==================================================
-# LIVE STOCK MARKET CLOCK
+# MARKET CLOCK
 # ==================================================
 
 @st.fragment(run_every="1s")
 def show_market_clock():
     now = datetime.now(ZoneInfo("America/New_York"))
 
-    market_open_time = now.replace(
+    opening = now.replace(
         hour=9, minute=30, second=0, microsecond=0
     )
-    market_close_time = now.replace(
+    closing = now.replace(
         hour=16, minute=0, second=0, microsecond=0
     )
 
     weekday = now.weekday() < 5
-    is_open = (
-        weekday
-        and market_open_time <= now < market_close_time
-    )
+    is_open = weekday and opening <= now < closing
 
     st.subheader("🕒 US Stock Market Clock")
 
-    col1, col2, col3 = st.columns(3)
-
-    col1.metric(
-        "Current Eastern Time",
-        now.strftime("%I:%M:%S %p"),
-    )
-    col2.metric("Market Opens", "9:30 AM")
-    col3.metric("Market Closes", "4:00 PM")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Eastern Time", now.strftime("%I:%M:%S %p"))
+    c2.metric("Market Opens", "9:30 AM")
+    c3.metric("Market Closes", "4:00 PM")
 
     if is_open:
-        st.success("🟢 MARKET OPEN")
-
-        remaining = market_close_time - now
-        seconds_left = max(0, int(remaining.total_seconds()))
-        hours, remainder = divmod(seconds_left, 3600)
+        st.success("🟢 REGULAR MARKET OPEN")
+        remaining = closing - now
+        seconds = max(0, int(remaining.total_seconds()))
+        hours, remainder = divmod(seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
+        st.write(f"Time until close: {hours}h {minutes}m {seconds}s")
+    else:
+        st.info("🔴 REGULAR MARKET CLOSED")
+        if weekday and now < opening:
+            next_open = now
+        else:
+            next_open = now + timedelta(days=1)
+
+        while next_open.weekday() >= 5:
+            next_open += timedelta(days=1)
 
         st.write(
-            f"Time until close: {hours}h {minutes}m {seconds}s"
+            "Next weekday opening: "
+            f"{next_open.strftime('%A, %B %d')} at 9:30 AM ET."
         )
 
-    else:
-        st.error("🔴 MARKET CLOSED")
-
-        if weekday and now < market_open_time:
-            st.write("The regular market opens today at 9:30 AM ET.")
-        elif weekday and now >= market_close_time:
-            next_day = now + timedelta(days=1)
-            while next_day.weekday() >= 5:
-                next_day += timedelta(days=1)
-
-            st.write(
-                f"Next weekday opening: "
-                f"{next_day.strftime('%A')} at 9:30 AM ET."
-            )
-        else:
-            next_day = now + timedelta(days=1)
-            while next_day.weekday() >= 5:
-                next_day += timedelta(days=1)
-
-            st.write(
-                f"Next weekday opening: "
-                f"{next_day.strftime('%A')} at 9:30 AM ET."
-            )
-
     st.caption(
-        "Regular NYSE/Nasdaq hours: Monday–Friday, "
-        "9:30 AM–4:00 PM Eastern. Holidays and special "
-        "early closures are not checked by this clock."
+        "Clock shows regular weekday hours only. "
+        "It does not check exchange holidays or early closures."
     )
 
 show_market_clock()
-
 st.divider()
 
 # ==================================================
-# STOCK DATA
+# DOWNLOAD STOCK DATA
 # ==================================================
 
 @st.cache_data(ttl=55)
 def get_stock_data(symbol, history, candle_interval):
-    df = yf.download(
-        symbol,
-        period=history,
-        interval=candle_interval,
-        auto_adjust=True,
-        progress=False,
-        threads=False,
-    )
+    try:
+        df = yf.download(
+            symbol,
+            period=history,
+            interval=candle_interval,
+            auto_adjust=True,
+            progress=False,
+            threads=False,
+        )
 
-    if df is None or df.empty:
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+
+        df = df.loc[:, ~df.columns.duplicated()].copy()
+
+        required = ["Open", "High", "Low", "Close"]
+        if not all(col in df.columns for col in required):
+            return pd.DataFrame()
+
+        for col in required:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+
+        return df.dropna(subset=required).copy()
+
+    except Exception:
         return pd.DataFrame()
-
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-
-    df = df.loc[:, ~df.columns.duplicated()].copy()
-
-    required = ["Open", "High", "Low", "Close"]
-
-    if not all(col in df.columns for col in required):
-        return pd.DataFrame()
-
-    for col in required:
-        df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return df.dropna(subset=required).copy()
 
 # ==================================================
-# TECHNICAL INDICATORS
+# INDICATORS
 # ==================================================
 
 def add_indicators(df):
@@ -186,43 +209,35 @@ def add_indicators(df):
     losses = -change.clip(upper=0)
 
     avg_gain = gains.ewm(
-        alpha=1 / 14,
-        min_periods=14,
-        adjust=False,
+        alpha=1 / 14, min_periods=14, adjust=False
     ).mean()
 
     avg_loss = losses.ewm(
-        alpha=1 / 14,
-        min_periods=14,
-        adjust=False,
+        alpha=1 / 14, min_periods=14, adjust=False
     ).mean()
 
     rs = avg_gain / avg_loss.replace(0, float("nan"))
-    rsi = 100 - (100 / (1 + rs))
+    df["RSI"] = 100 - (100 / (1 + rs))
 
-    rsi.loc[(avg_loss == 0) & (avg_gain > 0)] = 100
-    rsi.loc[(avg_gain == 0) & (avg_loss > 0)] = 0
-    rsi.loc[(avg_gain == 0) & (avg_loss == 0)] = 50
+    df.loc[(avg_loss == 0) & (avg_gain > 0), "RSI"] = 100
+    df.loc[(avg_gain == 0) & (avg_loss > 0), "RSI"] = 0
+    df.loc[(avg_gain == 0) & (avg_loss == 0), "RSI"] = 50
 
-    df["RSI"] = rsi
     return df
 
 # ==================================================
-# BUY / SELL / HOLD SIGNAL
+# TECHNICAL SIGNAL
 # ==================================================
 
 def calculate_signal(df):
     if len(df) < 2:
-        return "INSUFFICIENT DATA", 0, 0, [
-            "Not enough price candles."
-        ]
+        return "INSUFFICIENT DATA", 0, 0, ["Not enough candles."]
 
     last = df.iloc[-1]
-
     price = float(last["Close"])
-    rsi = last["RSI"]
     sma20 = last["SMA20"]
     sma50 = last["SMA50"]
+    rsi = last["RSI"]
 
     score = 0
     checks = 0
@@ -230,54 +245,43 @@ def calculate_signal(df):
 
     if pd.notna(sma20):
         checks += 1
-
         if price > float(sma20):
             score += 1
-            reasons.append(
-                "Bullish: price is above its 20-period average."
-            )
+            reasons.append("Price is above SMA20 (bullish).")
         elif price < float(sma20):
             score -= 1
-            reasons.append(
-                "Bearish: price is below its 20-period average."
-            )
+            reasons.append("Price is below SMA20 (bearish).")
         else:
             reasons.append("Price equals SMA20.")
     else:
-        reasons.append("SMA20 is unavailable.")
+        reasons.append("SMA20 needs more candles.")
 
     if pd.notna(sma20) and pd.notna(sma50):
         checks += 1
-
         if float(sma20) > float(sma50):
             score += 1
-            reasons.append("Bullish: SMA20 is above SMA50.")
+            reasons.append("SMA20 is above SMA50 (bullish).")
         elif float(sma20) < float(sma50):
             score -= 1
-            reasons.append("Bearish: SMA20 is below SMA50.")
+            reasons.append("SMA20 is below SMA50 (bearish).")
         else:
-            reasons.append("SMA20 and SMA50 are equal.")
+            reasons.append("Moving averages are equal.")
     else:
         reasons.append("Moving averages need more data.")
 
     if pd.notna(rsi):
-        rsi = float(rsi)
         checks += 1
-
+        rsi = float(rsi)
         if rsi < 30:
             score += 1
-            reasons.append(
-                f"RSI is {rsi:.1f}: commonly considered oversold."
-            )
+            reasons.append(f"RSI {rsi:.1f}: commonly considered oversold.")
         elif rsi > 70:
             score -= 1
-            reasons.append(
-                f"RSI is {rsi:.1f}: commonly considered overbought."
-            )
+            reasons.append(f"RSI {rsi:.1f}: commonly considered overbought.")
         else:
             reasons.append(f"RSI is {rsi:.1f}, within 30–70.")
     else:
-        reasons.append("RSI is unavailable.")
+        reasons.append("RSI needs more candles.")
 
     if checks < 2:
         signal = "INSUFFICIENT DATA"
@@ -296,309 +300,234 @@ def calculate_signal(df):
 
 def detect_patterns(df):
     if len(df) < 2:
-        return ["Not enough candles to check patterns."]
+        return ["Not enough candles."]
 
     current = df.iloc[-1]
     previous = df.iloc[-2]
 
-    o = float(current["Open"])
-    h = float(current["High"])
-    l = float(current["Low"])
-    c = float(current["Close"])
-
-    po = float(previous["Open"])
-    pc = float(previous["Close"])
+    o, h, low, c = map(
+        float, [
+            current["Open"], current["High"],
+            current["Low"], current["Close"]
+        ]
+    )
+    po, pc = float(previous["Open"]), float(previous["Close"])
 
     body = abs(c - o)
     previous_body = abs(pc - po)
-    candle_range = max(h - l, 1e-9)
-
+    candle_range = max(h - low, 1e-9)
     upper_wick = h - max(o, c)
-    lower_wick = min(o, c) - l
+    lower_wick = min(o, c) - low
 
     patterns = []
 
     if (
-        pc < po and c > o
-        and o <= pc and c >= po
+        pc < po and c > o and o <= pc and c >= po
         and body >= previous_body
     ):
-        patterns.append("Possible bullish engulfing pattern.")
+        patterns.append("Possible bullish engulfing.")
 
     if (
-        pc > po and c < o
-        and o >= pc and c <= po
+        pc > po and c < o and o >= pc and c <= po
         and body >= previous_body
     ):
-        patterns.append("Possible bearish engulfing pattern.")
+        patterns.append("Possible bearish engulfing.")
 
     if (
         lower_wick >= 2 * max(body, 1e-9)
         and upper_wick <= max(body * 0.6, candle_range * 0.08)
         and body / candle_range <= 0.4
     ):
-        patterns.append("Hammer-like candle with a long lower wick.")
+        patterns.append("Hammer-like candle.")
 
     if (
         upper_wick >= 2 * max(body, 1e-9)
         and lower_wick <= max(body * 0.6, candle_range * 0.08)
         and body / candle_range <= 0.4
     ):
-        patterns.append(
-            "Shooting-star-like candle with a long upper wick."
-        )
+        patterns.append("Shooting-star-like candle.")
 
-    if not patterns:
-        patterns.append(
-            "No selected pattern detected on the latest candle."
-        )
-
-    return patterns
+    return patterns or ["No selected pattern detected."]
 
 # ==================================================
-# MAIN DASHBOARD
+# WATCHLIST TABLE
 # ==================================================
 
 @st.fragment(run_every="60s" if auto_refresh else None)
-def show_dashboard():
-    try:
-        raw = get_stock_data(ticker, period, interval)
-    except Exception as error:
-        st.error(f"Could not download stock data: {error}")
+def show_watchlist():
+    st.subheader("⭐ Watchlist — All Selected Stocks")
+
+    if not watchlist:
+        st.info("Select stocks from the sidebar.")
         return
+
+    rows = []
+    progress = st.progress(0)
+    status = st.empty()
+
+    for i, symbol in enumerate(watchlist):
+        status.caption(f"Loading {symbol} ({i + 1}/{len(watchlist)})")
+
+        df = get_stock_data(symbol, "3mo", "1d")
+
+        if df.empty or len(df) < 2:
+            rows.append({
+                "Ticker": symbol,
+                "Price": "Unavailable",
+                "Daily Change": "N/A",
+                "RSI": "N/A",
+                "Signal": "NO DATA",
+            })
+        else:
+            data = add_indicators(df)
+            signal, score, checks, _ = calculate_signal(data)
+
+            current = float(data["Close"].iloc[-1])
+            previous = float(data["Close"].iloc[-2])
+            change_pct = (
+                (current / previous - 1) * 100 if previous else 0
+            )
+            rsi = data["RSI"].iloc[-1]
+
+            rows.append({
+                "Ticker": symbol,
+                "Price": f"${current:,.2f}",
+                "Daily Change": f"{change_pct:+.2f}%",
+                "RSI": f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A",
+                "Signal": signal,
+            })
+
+        progress.progress((i + 1) / len(watchlist))
+
+    status.empty()
+    progress.empty()
+
+    st.dataframe(
+        pd.DataFrame(rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.caption(
+        "Daily change compares the latest two available daily candles. "
+        "Prices and signals may be delayed."
+    )
+
+show_watchlist()
+
+st.divider()
+
+# ==================================================
+# MAIN STOCK CHART
+# ==================================================
+
+@st.fragment(run_every="60s" if auto_refresh else None)
+def show_main_chart():
+    st.subheader(f"📊 Main Stock: {ticker}")
+
+    raw = get_stock_data(ticker, period, interval)
 
     if raw.empty or len(raw) < 2:
         st.error(
-            "No usable stock data was found. Check the ticker, "
-            "internet connection, or selected interval."
+            "No usable data found. Check the ticker, internet connection, "
+            "or chart interval."
         )
         return
 
     data = add_indicators(raw)
-
     signal, score, checks, reasons = calculate_signal(data)
     patterns = detect_patterns(data)
 
     last = data.iloc[-1]
     price = float(last["Close"])
-    previous_price = float(data["Close"].iloc[-2])
+    previous = float(data["Close"].iloc[-2])
+    change_pct = (price / previous - 1) * 100 if previous else 0
     rsi = last["RSI"]
 
-    percent_change = (
-        (price / previous_price - 1) * 100
-        if previous_price != 0 else 0
-    )
-
-    # SIGNAL DISPLAY
-
-    colors = {
-        "BUY": "#00e676",
-        "SELL": "#ff5252",
-        "HOLD": "#ffd740",
-        "INSUFFICIENT DATA": "#ffffff",
-    }
-
-    signal_color = colors.get(signal, "#ffffff")
-
-    st.markdown(
-        f"""
-        <style>
-        .signal-card {{
-            background: linear-gradient(135deg, #17212b, #243447);
-            border: 2px solid {signal_color};
-            border-radius: 16px;
-            padding: 24px 16px;
-            text-align: center;
-            margin: 12px 0 24px 0;
-        }}
-        .signal-label {{
-            color: #e0e6ed;
-            font-size: 14px;
-            font-weight: 700;
-            letter-spacing: 3px;
-        }}
-        .signal-value {{
-            color: {signal_color};
-            font-size: 48px;
-            font-weight: 900;
-            line-height: 1.3;
-            margin: 12px 0;
-            overflow-wrap: anywhere;
-        }}
-        .signal-price {{
-            color: #ffffff;
-            font-size: 22px;
-            font-weight: 700;
-        }}
-        .signal-date {{
-            color: #d0d7de;
-            font-size: 13px;
-            margin-top: 12px;
-        }}
-        </style>
-        <div class="signal-card">
-            <div class="signal-label">STOCK SIGNAL</div>
-            <div class="signal-value">{signal}</div>
-            <div class="signal-price">{ticker} · ${price:,.2f}</div>
-            <div class="signal-date">
-                Latest available candle · {data.index[-1]}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-    # METRICS
-
-    col1, col2, col3, col4 = st.columns(4)
-
-    col1.metric(
-        "Latest Price",
-        f"${price:,.2f}",
-        f"{percent_change:+.2f}%",
-    )
-
-    col2.metric(
-        "RSI (14)",
-        f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A",
-    )
-
-    col3.metric(
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Latest Price", f"${price:,.2f}", f"{change_pct:+.2f}%")
+    c2.metric("Technical Signal", signal)
+    c3.metric("RSI (14)", f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A")
+    c4.metric(
         "SMA 20",
         f"${float(last['SMA20']):,.2f}"
         if pd.notna(last["SMA20"]) else "N/A",
     )
 
-    col4.metric(
-        "SMA 50",
-        f"${float(last['SMA50']):,.2f}"
-        if pd.notna(last["SMA50"]) else "N/A",
-    )
-
-    # CANDLESTICK CHART
-
-    st.subheader(f"🕯️ {ticker} Candlestick Chart")
+    st.caption(f"Latest available candle: {data.index[-1]}")
 
     fig = go.Figure()
 
-    fig.add_trace(
-        go.Candlestick(
-            x=data.index,
-            open=data["Open"],
-            high=data["High"],
-            low=data["Low"],
-            close=data["Close"],
-            name="Price",
-            increasing_line_color="#00e676",
-            decreasing_line_color="#ff5252",
-        )
-    )
+    fig.add_trace(go.Candlestick(
+        x=data.index,
+        open=data["Open"],
+        high=data["High"],
+        low=data["Low"],
+        close=data["Close"],
+        name="Price",
+        increasing_line_color="#00e676",
+        decreasing_line_color="#ff5252",
+    ))
 
-    fig.add_trace(
-        go.Scatter(
-            x=data.index,
-            y=data["SMA20"],
-            name="SMA 20",
-            mode="lines",
-            line=dict(color="#ffd740", width=2),
-        )
-    )
+    fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data["SMA20"],
+        name="SMA 20",
+        line=dict(color="#ffd740", width=2),
+    ))
 
-    fig.add_trace(
-        go.Scatter(
-            x=data.index,
-            y=data["SMA50"],
-            name="SMA 50",
-            mode="lines",
-            line=dict(color="#40c4ff", width=2),
-        )
-    )
+    fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data["SMA50"],
+        name="SMA 50",
+        line=dict(color="#40c4ff", width=2),
+    ))
 
     fig.update_layout(
         template="plotly_dark",
         height=550,
         xaxis_title="Date",
-        yaxis_title="Adjusted stock price ($)",
+        yaxis_title="Adjusted price ($)",
         xaxis_rangeslider_visible=False,
         hovermode="x unified",
     )
 
     st.plotly_chart(fig, use_container_width=True)
 
-    # SIGNAL EXPLANATION
+    st.subheader("Why this signal was generated")
+    st.write(f"Technical score: {score} | Valid checks: {checks} of 3")
 
-    st.subheader("Why the dashboard chose this signal")
+    for reason in reasons:
+        st.write("• " + reason)
 
-    left, right = st.columns(2)
+    st.subheader("Candlestick Pattern Checks")
+    for pattern in patterns:
+        st.write("• " + pattern)
 
-    with left:
-        st.write(f"**Signal:** {signal}")
-        st.write(f"**Technical score:** {score}")
-        st.write(f"**Valid indicator checks:** {checks} of 3")
-
-        for reason in reasons:
-            st.write("• " + reason)
-
-    with right:
-        st.write("**Candlestick pattern checks**")
-
-        for pattern in patterns:
-            st.write("• " + pattern)
-
-    # WATCHLIST
-
-    st.subheader("⭐ Watchlist")
-
-    rows = []
-
-    for symbol in watchlist:
-        try:
-            watch_data = get_stock_data(symbol, "1mo", "1d")
-
-            if watch_data.empty or len(watch_data) < 2:
-                rows.append({
-                    "Ticker": symbol,
-                    "Price": "Unavailable",
-                    "Daily change": "N/A",
-                })
-                continue
-
-            close = watch_data["Close"].astype(float)
-            current = float(close.iloc[-1])
-            previous = float(close.iloc[-2])
-
-            daily_change = (
-                (current / previous - 1) * 100
-                if previous != 0 else 0
-            )
-
-            rows.append({
-                "Ticker": symbol,
-                "Price": f"${current:,.2f}",
-                "Daily change": f"{daily_change:+.2f}%",
-            })
-
-        except Exception:
-            rows.append({
-                "Ticker": symbol,
-                "Price": "Unavailable",
-                "Daily change": "N/A",
-            })
-
-    if rows:
-        st.dataframe(
-            pd.DataFrame(rows),
-            use_container_width=True,
-            hide_index=True,
-        )
-    else:
-        st.info("Choose stocks in the sidebar to show your watchlist.")
-
-    st.caption(
-        "Yahoo Finance data may be delayed or unavailable. "
-        "Technical signals can be wrong and do not guarantee future returns."
+    # RSI chart
+    st.subheader("RSI (14) Chart")
+    rsi_fig = go.Figure()
+    rsi_fig.add_trace(go.Scatter(
+        x=data.index,
+        y=data["RSI"],
+        name="RSI",
+        line=dict(width=2),
+    ))
+    rsi_fig.add_hline(y=70, line_dash="dash", line_color="red")
+    rsi_fig.add_hline(y=30, line_dash="dash", line_color="green")
+    rsi_fig.update_layout(
+        template="plotly_dark",
+        height=260,
+        yaxis=dict(range=[0, 100]),
     )
+    st.plotly_chart(rsi_fig, use_container_width=True)
 
+show_main_chart()
 
-show_dashboard()
-
+st.divider()
+st.caption(
+    "Educational technical-analysis tool, not financial advice. "
+    "BUY/HOLD/SELL labels are rule-based indicators, not reliable "
+    "predictions or guarantees of future returns. Verify prices with "
+    "your broker before making financial decisions."
+)
