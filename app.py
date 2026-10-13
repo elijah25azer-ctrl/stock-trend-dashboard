@@ -1,3 +1,4 @@
+import html as htmllib
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -16,6 +17,9 @@ st.set_page_config(
     page_icon="📈",
     layout="wide",
 )
+
+# Market index bar is rendered into this slot (defined further down)
+index_bar_slot = st.container()
 
 st.title("📈 Stock Signal Dashboard")
 st.caption(
@@ -93,7 +97,7 @@ if custom_tickers.strip():
             watchlist.append(symbol)
 
 auto_refresh = st.sidebar.toggle(
-    "Refresh every 15 seconds",
+    "Refresh every 60 seconds",
     value=True,
 )
 
@@ -624,6 +628,98 @@ def show_earnings(symbol):
             "EPS means earnings per share. Surprise percentages are "
             "provided by the data source and may be unavailable."
         )
+
+# =========================================================
+# MARKET INDEX BAR (TOP OF PAGE)
+# =========================================================
+
+# (name, Yahoo symbol, logo text, logo background, logo text color)
+INDEX_ITEMS = [
+    ("Nasdaq", "^IXIC", "NQ", "#1a8fd1", "#ffffff"),
+    ("S&P 500", "^GSPC", "S&P", "#d6112b", "#ffffff"),
+    ("Dow Jones", "^DJI", "DJ", "#1fa3e0", "#ffffff"),
+    ("FTSE 100", "^FTSE", "FTSE", "#ffffff", "#1a2a6c"),
+    ("Nikkei 225", "^N225", "N225", "#ffffff", "#c8102e"),
+]
+
+INDEX_BAR_CSS = """
+<style>
+.idx-wrap {
+    display: flex; gap: 12px; flex-wrap: wrap;
+    padding: 14px; margin-bottom: 8px;
+    background: #0b0b0b; border: 1px solid #1f6b3a;
+    border-radius: 20px;
+    box-shadow: 0 0 18px rgba(31, 107, 58, 0.35);
+}
+.idx-card {
+    position: relative; flex: 1 1 180px; min-width: 180px;
+    display: flex; align-items: center; gap: 10px;
+    padding: 10px 12px; background: #161616;
+    border: 1px solid #2a2a2a; border-radius: 8px;
+}
+.idx-logo {
+    width: 44px; height: 44px; border-radius: 6px;
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 800; font-size: 13px; flex-shrink: 0;
+}
+.idx-name { color: #9a9a9a; font-size: 12px; }
+.idx-price { color: #ffffff; font-size: 17px; font-weight: 700; }
+.idx-chg { font-size: 12px; font-weight: 600; margin-left: 4px; }
+.idx-up { color: #2ecc71; }
+.idx-down { color: #ff6b6b; }
+.idx-flat { color: #9a9a9a; }
+.idx-badge {
+    position: absolute; top: -7px; right: 8px;
+    font-size: 11px; font-weight: 700;
+    padding: 1px 7px; border-radius: 6px;
+}
+.idx-badge.idx-up { background: #12361f; color: #2ecc71; }
+.idx-badge.idx-down { background: #3a1616; color: #ff6b6b; }
+.idx-badge.idx-flat { background: #262626; color: #9a9a9a; }
+</style>
+"""
+
+@st.fragment(run_every="30s" if auto_refresh else None)
+def show_index_bar():
+    cards = []
+
+    for name, symbol, short, bg, fg in INDEX_ITEMS:
+        df = get_stock_data(symbol, "3mo", "1d")
+
+        if df.empty or len(df) < 2:
+            price_txt, chg_txt, badge_txt, cls = "N/A", "", "–", "idx-flat"
+        else:
+            data = add_indicators(df)
+            current = float(data["Close"].iloc[-1])
+            previous = float(data["Close"].iloc[-2])
+            pct = (current / previous - 1) * 100 if previous else 0
+            rsi = data["RSI"].iloc[-1]
+
+            price_txt = f"{current:,.2f}"
+            chg_txt = f"{pct:+.2f}%"
+            badge_txt = f"{float(rsi):.0f}" if pd.notna(rsi) else "–"
+            cls = "idx-up" if pct >= 0 else "idx-down"
+
+        cards.append(
+            '<div class="idx-card">'
+            f'<div class="idx-logo" style="background:{bg};color:{fg};">'
+            f'{htmllib.escape(short)}</div>'
+            '<div>'
+            f'<div class="idx-name">{htmllib.escape(name)}</div>'
+            f'<div class="idx-price">{price_txt}'
+            f'<span class="idx-chg {cls}">{chg_txt}</span></div>'
+            '</div>'
+            f'<div class="idx-badge {cls}">◔ {badge_txt}</div>'
+            '</div>'
+        )
+
+    st.markdown(
+        INDEX_BAR_CSS + '<div class="idx-wrap">' + "".join(cards) + '</div>',
+        unsafe_allow_html=True,
+    )
+
+with index_bar_slot:
+    show_index_bar()
 
 # =========================================================
 # WATCHLIST
