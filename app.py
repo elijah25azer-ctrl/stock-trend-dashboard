@@ -759,9 +759,10 @@ def get_quote(symbol):
 
 @st.fragment(run_every="10s" if auto_refresh else None)
 def show_stock_bar():
-    cards = []
+    symbols = st.session_state["top_stocks"]
+    cols = st.columns(len(symbols))  # same layout as the Change buttons
 
-    for symbol in st.session_state["top_stocks"]:
+    for col, symbol in zip(cols, symbols):
         quote = get_quote(symbol)
         bg, fg = logo_colors(symbol)
         company = get_company_name(symbol)[:20]
@@ -777,8 +778,9 @@ def show_stock_bar():
             cls = "idx-up" if change >= 0 else "idx-down"
             badge_txt = "▲" if change >= 0 else "▼"
 
-        cards.append(
-            '<div class="idx-card">'
+        card = (
+            '<div class="idx-wrap" style="padding:8px;margin-bottom:0;">'
+            '<div class="idx-card" style="min-width:0;">'
             f'<div class="idx-logo" style="background:{bg};color:{fg};">'
             f'{htmllib.escape(symbol[:5])}</div>'
             '<div>'
@@ -788,13 +790,14 @@ def show_stock_bar():
             '</div>'
             f'<div class="idx-badge {cls}">{badge_txt}</div>'
             '</div>'
+            '</div>'
         )
 
-    st.markdown(
-        INDEX_BAR_CSS + '<div class="idx-wrap">' + "".join(cards) + '</div>',
-        unsafe_allow_html=True,
-    )
+        with col:
+            st.markdown(INDEX_BAR_CSS + card, unsafe_allow_html=True)
 
+@st.fragment(run_every="10s" if auto_refresh else None)
+def show_bar_status():
     now_et = datetime.now(ZoneInfo("America/New_York"))
     st.caption(
         f"🟢 Live prices from the newest 1-minute candle | "
@@ -806,7 +809,8 @@ with stock_bar_slot:
     show_stock_bar()
 
     # Change buttons live OUTSIDE the auto-refreshing fragment so the pop-up
-    # does not close while you are typing.
+    # does not close while you are typing. They use the same 5-column layout
+    # as the cards, so each button sits directly under its card.
     current_stocks = st.session_state["top_stocks"]
     edit_cols = st.columns(len(current_stocks))
 
@@ -834,6 +838,8 @@ with stock_bar_slot:
                             st.session_state["top_stocks"]
                         )
                         st.rerun()
+
+    show_bar_status()
 
 # =========================================================
 # WATCHLIST
