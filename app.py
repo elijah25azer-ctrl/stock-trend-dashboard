@@ -18,7 +18,9 @@ st.set_page_config(
     layout="wide",
 )
 
-# Market index bar is rendered into this slot (defined further down)
+# Live stock bar and market index bar are rendered into these slots
+# (the code that fills them is defined further down)
+stock_bar_slot = st.container()
 index_bar_slot = st.container()
 
 st.title("📈 Stock Signal Dashboard")
@@ -720,6 +722,97 @@ def show_index_bar():
 
 with index_bar_slot:
     show_index_bar()
+
+# =========================================================
+# LIVE STOCK BAR (MSFT, AAPL, NVDA, TSLA, AMZN)
+# =========================================================
+
+# (symbol, company, logo background, logo text color)
+TOP_STOCKS = [
+    ("MSFT", "Microsoft", "#00a4ef", "#ffffff"),
+    ("AAPL", "Apple", "#a2aaad", "#111111"),
+    ("NVDA", "NVIDIA", "#76b900", "#111111"),
+    ("TSLA", "Tesla", "#cc0000", "#ffffff"),
+    ("AMZN", "Amazon", "#ff9900", "#111111"),
+]
+
+@st.cache_data(ttl=600)
+def get_daily_closes(symbol):
+    """Recent daily closes, used to find yesterday's close."""
+    df = get_stock_data(symbol, "5d", "1d")
+    if df.empty:
+        return []
+    return [(d.date(), float(c)) for d, c in zip(df.index, df["Close"])]
+
+@st.cache_data(ttl=8)
+def get_quote(symbol):
+    """Latest price (newest 1-minute candle), previous close, candle time."""
+    intraday = get_stock_data(symbol, "1d", "1m")
+    daily = get_daily_closes(symbol)
+
+    if intraday.empty:
+        if len(daily) < 2:
+            return None
+        return daily[-1][1], daily[-2][1], str(daily[-1][0])
+
+    price = float(intraday["Close"].iloc[-1])
+    last_day = intraday.index[-1].date()
+
+    prev = None
+    for day, close in reversed(daily):
+        if day < last_day:
+            prev = close
+            break
+    if prev is None:
+        prev = float(intraday["Open"].iloc[0])
+
+    return price, prev, intraday.index[-1].strftime("%I:%M:%S %p")
+
+@st.fragment(run_every="10s" if auto_refresh else None)
+def show_stock_bar():
+    cards = []
+
+    for symbol, company, bg, fg in TOP_STOCKS:
+        quote = get_quote(symbol)
+
+        if quote is None:
+            price_txt, chg_txt, badge_txt, cls = "N/A", "", "–", "idx-flat"
+        else:
+            price, prev, _ = quote
+            change = price - prev
+            pct = (price / prev - 1) * 100 if prev else 0
+            price_txt = f"${price:,.2f}"
+            chg_txt = f"{change:+.2f} ({pct:+.2f}%)"
+            cls = "idx-up" if change >= 0 else "idx-down"
+            badge_txt = "▲" if change >= 0 else "▼"
+
+        cards.append(
+            '<div class="idx-card">'
+            f'<div class="idx-logo" style="background:{bg};color:{fg};">'
+            f'{htmllib.escape(symbol)}</div>'
+            '<div>'
+            f'<div class="idx-name">{htmllib.escape(company)}</div>'
+            f'<div class="idx-price">{price_txt}</div>'
+            f'<div class="idx-chg {cls}" style="margin-left:0;">{chg_txt}</div>'
+            '</div>'
+            f'<div class="idx-badge {cls}">{badge_txt}</div>'
+            '</div>'
+        )
+
+    st.markdown(
+        INDEX_BAR_CSS + '<div class="idx-wrap">' + "".join(cards) + '</div>',
+        unsafe_allow_html=True,
+    )
+
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    st.caption(
+        f"🟢 Live prices from the newest 1-minute candle | "
+        f"Last checked {now_et.strftime('%I:%M:%S %p')} ET | "
+        "Updates every 10 seconds. Yahoo data may be delayed."
+    )
+
+with stock_bar_slot:
+    show_stock_bar()
 
 # =========================================================
 # WATCHLIST
