@@ -60,14 +60,20 @@ ticker = st.sidebar.text_input(
 
 period = st.sidebar.selectbox(
     "Chart history",
-    ["1mo", "3mo", "6mo", "1y", "2y", "5y"],
-    index=2,
+    ["1d", "5d", "1mo", "3mo", "6mo", "1y", "2y", "5y"],
+    index=4,
 )
 
 interval = st.sidebar.selectbox(
     "Candle interval",
-    ["1d", "1h", "30m", "15m", "5m"],
+    ["1d", "1h", "30m", "15m", "5m", "1m"],
     index=0,
+)
+
+st.sidebar.caption(
+    "Tip: for a single-day intraday view like a broker chart, use "
+    "history 1d with interval 1m or 5m. Yahoo only allows 1m for the "
+    "last ~7 days."
 )
 
 watchlist = st.sidebar.multiselect(
@@ -171,7 +177,7 @@ def get_stock_data(symbol, history, candle_interval):
             symbol,
             period=history,
             interval=candle_interval,
-            auto_adjust=True,
+            auto_adjust=False,
             progress=False,
             threads=False,
         )
@@ -723,7 +729,10 @@ def show_main_chart():
         if pd.notna(last["SMA20"]) else "N/A",
     )
 
-    st.caption(f"Latest available candle: {data.index[-1]}")
+    st.caption(
+        f"Latest available candle: {data.index[-1]} | "
+        "Actual traded prices (not dividend-adjusted)."
+    )
 
     UP_COLOR = "#238a23"    # green candles
     DOWN_COLOR = "#d6404f"  # red candles
