@@ -18,14 +18,10 @@ st.set_page_config(
     layout="wide",
 )
 
-# Live stock bar is rendered into this slot
-# (the code that fills it is defined further down)
 stock_bar_slot = st.container()
 
 st.title("📈 Stock Signal Dashboard")
-st.caption(
-    "Technical signals | Candlesticks | Watchlist | News | Earnings"
-)
+st.caption("Technical signals | Candlesticks | Watchlist | News | Earnings")
 
 # =========================================================
 # STOCK OPTIONS
@@ -76,9 +72,8 @@ interval = st.sidebar.selectbox(
 )
 
 st.sidebar.caption(
-    "Tip: for a single-day intraday view like a broker chart, use "
-    "history 1d with interval 1m or 5m. Yahoo only allows 1m for the "
-    "last ~7 days."
+    "For an intraday view, use history 1d with interval 1m or 5m. "
+    "Yahoo generally limits 1-minute history to about 7 days."
 )
 
 watchlist = st.sidebar.multiselect(
@@ -168,6 +163,7 @@ def show_market_clock():
         "closures are not checked."
     )
 
+
 show_market_clock()
 st.divider()
 
@@ -196,6 +192,7 @@ def get_stock_data(symbol, history, candle_interval):
         df = df.loc[:, ~df.columns.duplicated()].copy()
 
         required = ["Open", "High", "Low", "Close"]
+
         if not all(col in df.columns for col in required):
             return pd.DataFrame()
 
@@ -206,6 +203,7 @@ def get_stock_data(symbol, history, candle_interval):
 
     except Exception:
         return pd.DataFrame()
+
 
 # =========================================================
 # TECHNICAL INDICATORS
@@ -243,6 +241,7 @@ def add_indicators(df):
 
     return df
 
+
 # =========================================================
 # BUY / HOLD / SELL SIGNAL
 # =========================================================
@@ -263,6 +262,7 @@ def calculate_signal(df):
 
     if pd.notna(sma20):
         checks += 1
+
         if price > float(sma20):
             score += 1
             reasons.append("Price is above SMA20 (bullish).")
@@ -276,6 +276,7 @@ def calculate_signal(df):
 
     if pd.notna(sma20) and pd.notna(sma50):
         checks += 1
+
         if float(sma20) > float(sma50):
             score += 1
             reasons.append("SMA20 is above SMA50 (bullish).")
@@ -293,10 +294,14 @@ def calculate_signal(df):
 
         if rsi < 30:
             score += 1
-            reasons.append(f"RSI {rsi:.1f}: commonly considered oversold.")
+            reasons.append(
+                f"RSI {rsi:.1f}: commonly considered oversold."
+            )
         elif rsi > 70:
             score -= 1
-            reasons.append(f"RSI {rsi:.1f}: commonly considered overbought.")
+            reasons.append(
+                f"RSI {rsi:.1f}: commonly considered overbought."
+            )
         else:
             reasons.append(f"RSI is {rsi:.1f}, within 30–70.")
     else:
@@ -313,6 +318,7 @@ def calculate_signal(df):
 
     return signal, score, checks, reasons
 
+
 # =========================================================
 # CANDLESTICK PATTERNS
 # =========================================================
@@ -327,8 +333,10 @@ def detect_patterns(df):
     o, h, low, c = map(
         float,
         [
-            current["Open"], current["High"],
-            current["Low"], current["Close"],
+            current["Open"],
+            current["High"],
+            current["Low"],
+            current["Close"],
         ],
     )
 
@@ -372,6 +380,7 @@ def detect_patterns(df):
 
     return patterns or ["No selected pattern detected."]
 
+
 # =========================================================
 # NEWS DATA
 # =========================================================
@@ -390,6 +399,7 @@ def get_stock_news(symbol):
             publisher = content.get("publisher", "")
 
             provider = content.get("provider")
+
             if isinstance(provider, dict):
                 publisher = provider.get("displayName", publisher)
 
@@ -402,7 +412,8 @@ def get_stock_news(symbol):
             try:
                 if isinstance(published, (int, float)):
                     published = datetime.fromtimestamp(
-                        published, tz=ZoneInfo("UTC")
+                        published,
+                        tz=ZoneInfo("UTC"),
                     ).strftime("%Y-%m-%d %H:%M UTC")
                 elif published:
                     published = str(published)
@@ -436,6 +447,7 @@ def get_stock_news(symbol):
     except Exception:
         return []
 
+
 def show_news(symbol):
     st.subheader(f"📰 Latest News — {symbol}")
 
@@ -455,6 +467,7 @@ def show_news(symbol):
     for article in items:
         with st.container(border=True):
             st.markdown(f"**{article['Headline']}**")
+
             st.caption(
                 f"{article['Publisher']} • {article['Published']}"
             )
@@ -467,6 +480,7 @@ def show_news(symbol):
             if link and urlparse(link).scheme in ("https", "http"):
                 st.markdown(f"[Read full article]({link})")
 
+
 # =========================================================
 # EARNINGS & FINANCIAL RESULTS
 # =========================================================
@@ -476,8 +490,6 @@ def get_earnings_data(symbol):
     """Get quarterly financial results and reported EPS history."""
     try:
         stock = yf.Ticker(symbol)
-
-        # Quarterly income statement
         income = stock.quarterly_income_stmt
         financial_rows = []
 
@@ -494,17 +506,24 @@ def get_earnings_data(symbol):
                 return None
 
             revenue_row = find_row("Total Revenue", "Operating Revenue")
-            income_row = find_row("Net Income", "Net Income Common Stockholders")
+            income_row = find_row(
+                "Net Income",
+                "Net Income Common Stockholders",
+            )
             eps_row = find_row("Diluted EPS", "Basic EPS")
             operating_row = find_row("Operating Income")
 
             for date in income.columns:
+
                 def get_value(row):
                     if row is None:
                         return None
+
                     value = income.loc[row, date]
+
                     if pd.isna(value):
                         return None
+
                     return float(value)
 
                 financial_rows.append({
@@ -516,9 +535,8 @@ def get_earnings_data(symbol):
                 })
 
         financials = pd.DataFrame(financial_rows)
-
-        # Earnings estimates and reported EPS
         earnings_rows = []
+
         try:
             earnings = stock.get_earnings_dates(limit=12)
 
@@ -543,6 +561,7 @@ def get_earnings_data(symbol):
                             if pd.notna(surprise) else None
                         ),
                     })
+
         except Exception:
             pass
 
@@ -561,7 +580,6 @@ def show_earnings(symbol):
 
     financials, earnings = get_earnings_data(symbol)
 
-    # Latest reported financial results
     st.markdown("### Latest Quarterly Financial Results")
 
     if financials.empty:
@@ -589,13 +607,15 @@ def show_earnings(symbol):
         c2.metric("Net Income", money(latest["Net Income ($)"]))
 
         c3, c4 = st.columns(2)
+
         c3.metric(
             "Operating Income",
-            money(latest["Operating Income ($)"])
+            money(latest["Operating Income ($)"]),
         )
+
         c4.metric(
             "Diluted EPS",
-            eps_money(latest["EPS ($/share)"])
+            eps_money(latest["EPS ($/share)"]),
         )
 
         st.caption(
@@ -604,13 +624,13 @@ def show_earnings(symbol):
         )
 
         st.markdown("### Previous Quarterly Results")
+
         st.dataframe(
             financials,
             use_container_width=True,
             hide_index=True,
         )
 
-    # Earnings estimates compared with actual reported EPS
     st.markdown("### 📊 Earnings: Estimate vs. Actual")
 
     if earnings.empty:
@@ -630,8 +650,9 @@ def show_earnings(symbol):
             "provided by the data source and may be unavailable."
         )
 
+
 # =========================================================
-# BAR STYLING (used by the live stock bar)
+# BAR STYLING
 # =========================================================
 
 INDEX_BAR_CSS = """
@@ -671,19 +692,20 @@ INDEX_BAR_CSS = """
 </style>
 """
 
-
 # =========================================================
-# LIVE STOCK BAR (MSFT, AAPL, NVDA, TSLA, AMZN)
+# LIVE STOCK BAR
 # =========================================================
 
 DEFAULT_TOP_STOCKS = ["MSFT", "AAPL", "NVDA", "TSLA", "AMZN"]
 
 KNOWN_NAMES = {
-    "MSFT": "Microsoft", "AAPL": "Apple", "NVDA": "NVIDIA",
-    "TSLA": "Tesla", "AMZN": "Amazon",
+    "MSFT": "Microsoft",
+    "AAPL": "Apple",
+    "NVDA": "NVIDIA",
+    "TSLA": "Tesla",
+    "AMZN": "Amazon",
 }
 
-# logo background, logo text color
 KNOWN_STYLES = {
     "MSFT": ("#00a4ef", "#ffffff"),
     "AAPL": ("#a2aaad", "#111111"),
@@ -692,75 +714,96 @@ KNOWN_STYLES = {
     "AMZN": ("#ff9900", "#111111"),
 }
 
+
 def parse_stock_list(text):
     out = []
+
     for item in (text or "").upper().replace(" ", "").split(","):
         if item and item not in out:
             out.append(item)
+
     return out[:5]
 
-# The 5 stocks in the top bar. Saved in the page URL (?stocks=...) so your
-# choices survive a browser refresh and can be bookmarked.
+
 if "top_stocks" not in st.session_state:
     saved = parse_stock_list(st.query_params.get("stocks", ""))
+
     if saved:
         filler = [d for d in DEFAULT_TOP_STOCKS if d not in saved]
         st.session_state["top_stocks"] = (saved + filler)[:5]
     else:
         st.session_state["top_stocks"] = list(DEFAULT_TOP_STOCKS)
 
+
 @st.cache_data(ttl=86400)
 def get_company_name(symbol):
     if symbol in KNOWN_NAMES:
         return KNOWN_NAMES[symbol]
+
     try:
         info = yf.Ticker(symbol).info
         return info.get("shortName") or info.get("longName") or symbol
     except Exception:
         return symbol
 
+
 def logo_colors(symbol):
     if symbol in KNOWN_STYLES:
         return KNOWN_STYLES[symbol]
+
     hue = (sum(ord(ch) for ch in symbol) * 37) % 360
     return f"hsl({hue},65%,45%)", "#ffffff"
 
+
 @st.cache_data(ttl=600)
 def get_daily_closes(symbol):
-    """Recent daily closes, used to find yesterday's close."""
     df = get_stock_data(symbol, "5d", "1d")
+
     if df.empty:
         return []
-    return [(d.date(), float(c)) for d, c in zip(df.index, df["Close"])]
+
+    return [
+        (d.date(), float(c))
+        for d, c in zip(df.index, df["Close"])
+    ]
+
 
 @st.cache_data(ttl=8)
 def get_quote(symbol):
-    """Latest price (newest 1-minute candle), previous close, candle time."""
+    """Latest available 1-minute candle, previous close, and candle time."""
     intraday = get_stock_data(symbol, "1d", "1m")
     daily = get_daily_closes(symbol)
 
     if intraday.empty:
         if len(daily) < 2:
             return None
+
         return daily[-1][1], daily[-2][1], str(daily[-1][0])
 
     price = float(intraday["Close"].iloc[-1])
     last_day = intraday.index[-1].date()
 
     prev = None
+
     for day, close in reversed(daily):
         if day < last_day:
             prev = close
             break
+
     if prev is None:
         prev = float(intraday["Open"].iloc[0])
 
-    return price, prev, intraday.index[-1].strftime("%I:%M:%S %p")
+    return (
+        price,
+        prev,
+        intraday.index[-1].strftime("%I:%M:%S %p"),
+    )
+
 
 @st.fragment(run_every="10s" if auto_refresh else None)
 def show_stock_bar():
     symbols = st.session_state["top_stocks"]
-    cols = st.columns(len(symbols))  # same layout as the Change buttons
+    cols = st.columns(len(symbols))
 
     for col, symbol in zip(cols, symbols):
         quote = get_quote(symbol)
@@ -768,11 +811,15 @@ def show_stock_bar():
         company = get_company_name(symbol)[:20]
 
         if quote is None:
-            price_txt, chg_txt, badge_txt, cls = "N/A", "", "–", "idx-flat"
+            price_txt = "N/A"
+            chg_txt = ""
+            badge_txt = "–"
+            cls = "idx-flat"
         else:
             price, prev, _ = quote
             change = price - prev
             pct = (price / prev - 1) * 100 if prev else 0
+
             price_txt = f"${price:,.2f}"
             chg_txt = f"{change:+.2f} ({pct:+.2f}%)"
             cls = "idx-up" if change >= 0 else "idx-down"
@@ -786,7 +833,8 @@ def show_stock_bar():
             '<div>'
             f'<div class="idx-name">{htmllib.escape(company)}</div>'
             f'<div class="idx-price">{price_txt}</div>'
-            f'<div class="idx-chg {cls}" style="margin-left:0;">{chg_txt}</div>'
+            f'<div class="idx-chg {cls}" style="margin-left:0;">'
+            f'{chg_txt}</div>'
             '</div>'
             f'<div class="idx-badge {cls}">{badge_txt}</div>'
             '</div>'
@@ -794,29 +842,35 @@ def show_stock_bar():
         )
 
         with col:
-            st.markdown(INDEX_BAR_CSS + card, unsafe_allow_html=True)
+            st.markdown(
+                INDEX_BAR_CSS + card,
+                unsafe_allow_html=True,
+            )
+
 
 @st.fragment(run_every="10s" if auto_refresh else None)
 def show_bar_status():
     now_et = datetime.now(ZoneInfo("America/New_York"))
+
     st.caption(
-        f"🟢 Live prices from the newest 1-minute candle | "
+        "Yahoo quote from newest available 1-minute candle | "
         f"Last checked {now_et.strftime('%I:%M:%S %p')} ET | "
         "Updates every 10 seconds. Yahoo data may be delayed."
     )
 
+
 with stock_bar_slot:
     show_stock_bar()
 
-    # Change buttons live OUTSIDE the auto-refreshing fragment so the pop-up
-    # does not close while you are typing. They use the same 5-column layout
-    # as the cards, so each button sits directly under its card.
     current_stocks = st.session_state["top_stocks"]
     edit_cols = st.columns(len(current_stocks))
 
     for i, (col, current) in enumerate(zip(edit_cols, current_stocks)):
         with col:
-            with st.popover(f"✏️ Change {current}", use_container_width=True):
+            with st.popover(
+                f"✏️ Change {current}",
+                use_container_width=True,
+            ):
                 new_symbol = st.text_input(
                     "New ticker",
                     key=f"new_ticker_{i}_{current}",
@@ -828,10 +882,15 @@ with stock_bar_slot:
 
                     if not sym:
                         st.warning("Type a ticker first.")
+
                     elif sym in current_stocks:
                         st.warning(f"{sym} is already in the bar.")
+
                     elif get_quote(sym) is None:
-                        st.error(f"No data found for {sym}. Check the ticker.")
+                        st.error(
+                            f"No data found for {sym}. Check the ticker."
+                        )
+
                     else:
                         st.session_state["top_stocks"][i] = sym
                         st.query_params["stocks"] = ",".join(
@@ -840,6 +899,7 @@ with stock_bar_slot:
                         st.rerun()
 
     show_bar_status()
+
 
 # =========================================================
 # WATCHLIST
@@ -869,22 +929,27 @@ def show_watchlist():
                 "RSI": "N/A",
                 "Signal": "NO DATA",
             })
+
         else:
             data = add_indicators(df)
             signal, _, _, _ = calculate_signal(data)
 
             current = float(data["Close"].iloc[-1])
             previous = float(data["Close"].iloc[-2])
+
             change_pct = (
                 (current / previous - 1) * 100 if previous else 0
             )
+
             rsi = data["RSI"].iloc[-1]
 
             rows.append({
                 "Ticker": symbol,
                 "Price": f"${current:,.2f}",
                 "Daily Change": f"{change_pct:+.2f}%",
-                "RSI": f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A",
+                "RSI": (
+                    f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A"
+                ),
                 "Signal": signal,
             })
 
@@ -904,8 +969,10 @@ def show_watchlist():
         "Data may be delayed."
     )
 
+
 show_watchlist()
 st.divider()
+
 
 # =========================================================
 # MAIN CHART
@@ -929,16 +996,57 @@ def show_main_chart():
     patterns = detect_patterns(data)
 
     last = data.iloc[-1]
-    price = float(last["Close"])
-    previous = float(data["Close"].iloc[-2])
-    change_pct = (price / previous - 1) * 100 if previous else 0
     rsi = last["RSI"]
+
+    # Match the main quote with the top stock cards.
+    quote = get_quote(ticker)
+
+    if quote is not None:
+        price, previous_close, quote_time = quote
+
+        change_pct = (
+            (price / previous_close - 1) * 100
+            if previous_close else 0
+        )
+
+        price_label = "Latest Quote"
+
+        price_caption = (
+            f"Quote from the newest available 1-minute candle: "
+            f"{quote_time}. The candlestick chart below uses your "
+            "selected candle interval; its last candle close can differ."
+        )
+
+    else:
+        price = float(last["Close"])
+        previous = float(data["Close"].iloc[-2])
+
+        change_pct = (
+            (price / previous - 1) * 100 if previous else 0
+        )
+
+        price_label = "Latest Candle Close"
+
+        price_caption = (
+            "Quote unavailable. Showing selected-interval candle close "
+            f"from {data.index[-1]} instead."
+        )
 
     c1, c2, c3, c4 = st.columns(4)
 
-    c1.metric("Latest Price", f"${price:,.2f}", f"{change_pct:+.2f}%")
+    c1.metric(
+        price_label,
+        f"${price:,.2f}",
+        f"{change_pct:+.2f}%",
+    )
+
     c2.metric("Technical Signal", signal)
-    c3.metric("RSI (14)", f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A")
+
+    c3.metric(
+        "RSI (14)",
+        f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A",
+    )
+
     c4.metric(
         "SMA 20",
         f"${float(last['SMA20']):,.2f}"
@@ -946,14 +1054,16 @@ def show_main_chart():
     )
 
     st.caption(
-        f"Latest available candle: {data.index[-1]} | "
-        "Actual traded prices (not dividend-adjusted)."
+        price_caption
+        + " Actual traded prices (not dividend-adjusted). "
+        "Yahoo Finance data may be delayed."
     )
 
-    UP_COLOR = "#238a23"    # green candles
-    DOWN_COLOR = "#d6404f"  # red candles
+    UP_COLOR = "#238a23"
+    DOWN_COLOR = "#d6404f"
 
     has_volume = "Volume" in data.columns
+
     fig = make_subplots(
         rows=2 if has_volume else 1,
         cols=1,
@@ -962,52 +1072,82 @@ def show_main_chart():
         row_heights=[0.84, 0.16] if has_volume else [1.0],
     )
 
-    fig.add_trace(go.Candlestick(
-        x=data.index,
-        open=data["Open"],
-        high=data["High"],
-        low=data["Low"],
-        close=data["Close"],
-        name="Price",
-        increasing=dict(line=dict(color=UP_COLOR, width=1), fillcolor=UP_COLOR),
-        decreasing=dict(line=dict(color=DOWN_COLOR, width=1), fillcolor=DOWN_COLOR),
-        whiskerwidth=0,
-    ), row=1, col=1)
+    fig.add_trace(
+        go.Candlestick(
+            x=data.index,
+            open=data["Open"],
+            high=data["High"],
+            low=data["Low"],
+            close=data["Close"],
+            name="Price",
+            increasing=dict(
+                line=dict(color=UP_COLOR, width=1),
+                fillcolor=UP_COLOR,
+            ),
+            decreasing=dict(
+                line=dict(color=DOWN_COLOR, width=1),
+                fillcolor=DOWN_COLOR,
+            ),
+            whiskerwidth=0,
+        ),
+        row=1,
+        col=1,
+    )
 
     if show_sma:
-        fig.add_trace(go.Scatter(
-            x=data.index,
-            y=data["SMA20"],
-            name="SMA 20",
-            line=dict(color="#f5a623", width=1.2),
-        ), row=1, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["SMA20"],
+                name="SMA 20",
+                line=dict(color="#f5a623", width=1.2),
+            ),
+            row=1,
+            col=1,
+        )
 
-        fig.add_trace(go.Scatter(
-            x=data.index,
-            y=data["SMA50"],
-            name="SMA 50",
-            line=dict(color="#4a90e2", width=1.2),
-        ), row=1, col=1)
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["SMA50"],
+                name="SMA 50",
+                line=dict(color="#4a90e2", width=1.2),
+            ),
+            row=1,
+            col=1,
+        )
 
     if has_volume:
         vol_colors = [
             UP_COLOR if c >= o else DOWN_COLOR
             for o, c in zip(data["Open"], data["Close"])
         ]
-        fig.add_trace(go.Bar(
-            x=data.index,
-            y=data["Volume"],
-            name="Volume",
-            marker=dict(color=vol_colors, line=dict(width=0)),
-            opacity=0.55,
-            showlegend=False,
-        ), row=2, col=1)
+
+        fig.add_trace(
+            go.Bar(
+                x=data.index,
+                y=data["Volume"],
+                name="Volume",
+                marker=dict(
+                    color=vol_colors,
+                    line=dict(width=0),
+                ),
+                opacity=0.55,
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+
         fig.update_yaxes(visible=False, row=2, col=1)
 
-    # Hide weekends (and overnight for intraday candles) so there are no gaps
+    # Hide weekends and overnight gaps for intraday candles.
     breaks = [dict(bounds=["sat", "mon"])]
+
     if interval != "1d":
-        breaks.append(dict(bounds=[16, 9.5], pattern="hour"))
+        breaks.append(
+            dict(bounds=[16, 9.5], pattern="hour")
+        )
 
     fig.update_xaxes(
         rangebreaks=breaks,
@@ -1023,7 +1163,8 @@ def show_main_chart():
         gridcolor="#eeeeee",
         zeroline=False,
         tickformat=",.2f",
-        row=1, col=1,
+        row=1,
+        col=1,
     )
 
     fig.update_layout(
@@ -1041,7 +1182,10 @@ def show_main_chart():
     st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("Why this signal was generated")
-    st.write(f"Technical score: {score} | Valid checks: {checks} of 3")
+
+    st.write(
+        f"Technical score: {score} | Valid checks: {checks} of 3"
+    )
 
     for reason in reasons:
         st.write("• " + reason)
@@ -1054,13 +1198,27 @@ def show_main_chart():
     st.subheader("RSI (14) Chart")
 
     rsi_fig = go.Figure()
-    rsi_fig.add_trace(go.Scatter(
-        x=data.index,
-        y=data["RSI"],
-        name="RSI",
-    ))
-    rsi_fig.add_hline(y=70, line_dash="dash", line_color="red")
-    rsi_fig.add_hline(y=30, line_dash="dash", line_color="green")
+
+    rsi_fig.add_trace(
+        go.Scatter(
+            x=data.index,
+            y=data["RSI"],
+            name="RSI",
+        )
+    )
+
+    rsi_fig.add_hline(
+        y=70,
+        line_dash="dash",
+        line_color="red",
+    )
+
+    rsi_fig.add_hline(
+        y=30,
+        line_dash="dash",
+        line_color="green",
+    )
+
     rsi_fig.update_layout(
         template="plotly_white",
         paper_bgcolor="white",
@@ -1068,14 +1226,20 @@ def show_main_chart():
         font=dict(color="#333333"),
         height=260,
         margin=dict(l=20, r=20, t=20, b=20),
-        yaxis=dict(range=[0, 100], side="right", gridcolor="#eeeeee"),
+        yaxis=dict(
+            range=[0, 100],
+            side="right",
+            gridcolor="#eeeeee",
+        ),
         xaxis=dict(showgrid=False),
     )
 
     st.plotly_chart(rsi_fig, use_container_width=True)
 
+
 show_main_chart()
 st.divider()
+
 
 # =========================================================
 # NEWS AND EARNINGS CENTER
@@ -1094,11 +1258,13 @@ with news_tab:
 with earnings_tab:
     show_earnings(ticker)
 
+
 # =========================================================
 # FOOTER
 # =========================================================
 
 st.divider()
+
 st.caption(
     "Educational tool, not financial advice. Technical signals are not "
     "guaranteed predictions. Yahoo Finance data may be delayed or "
