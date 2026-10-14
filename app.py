@@ -944,6 +944,14 @@ def show_main_chart():
     change_pct = (price / previous - 1) * 100 if previous else 0
     rsi = last["RSI"]
 
+    # Use the same live quote as the top bar (newest 1-minute candle vs
+    # yesterday's close) so the two always show the same numbers.
+    quote = get_quote(ticker)
+    if quote is not None:
+        live_price, live_prev, _ = quote
+        price = live_price
+        change_pct = (live_price / live_prev - 1) * 100 if live_prev else 0
+
     c1, c2, c3, c4 = st.columns(4)
 
     c1.metric("Latest Price", f"${price:,.2f}", f"{change_pct:+.2f}%")
