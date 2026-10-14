@@ -107,6 +107,8 @@ show_sma = st.sidebar.toggle(
     value=False,
 )
 
+st.sidebar.caption("Dashboard version: v7 (official-close fix)")
+
 if st.sidebar.button("🔄 Refresh all data"):
     st.cache_data.clear()
     st.rerun()
@@ -735,7 +737,7 @@ def logo_colors(symbol):
     hue = (sum(ord(ch) for ch in symbol) * 37) % 360
     return f"hsl({hue},65%,45%)", "#ffffff"
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=60)
 def get_daily_closes(symbol):
     """Recent daily closes, used to find yesterday's close."""
     df = get_stock_data(symbol, "5d", "1d")
@@ -756,6 +758,20 @@ def get_quote(symbol):
 
     price = float(intraday["Close"].iloc[-1])
     last_day = intraday.index[-1].date()
+
+    # When the regular session is over, the official closing price (daily
+    # candle) can differ by a few cents from the last 1-minute candle.
+    # Brokers show the official close, so use that when the market is closed.
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+    in_session = (
+        now_et.weekday() < 5
+        and (9, 30) <= (now_et.hour, now_et.minute) < (16, 0)
+    )
+    if not in_session:
+        for day, close in reversed(daily):
+            if day == last_day:
+                price = close
+                break
 
     prev = None
     for day, close in reversed(daily):
@@ -809,8 +825,17 @@ def show_stock_bar():
 @st.fragment(run_every="10s" if auto_refresh else None)
 def show_bar_status():
     now_et = datetime.now(ZoneInfo("America/New_York"))
+    in_session = (
+        now_et.weekday() < 5
+        and (9, 30) <= (now_et.hour, now_et.minute) < (16, 0)
+    )
+    source = (
+        "🟢 Live prices from the newest 1-minute candle"
+        if in_session else
+        "🔴 Market closed: showing the official closing price"
+    )
     st.caption(
-        f"🟢 Live prices from the newest 1-minute candle | "
+        f"{source} | "
         f"Last checked {now_et.strftime('%I:%M:%S %p')} ET | "
         "Updates every 10 seconds. Yahoo data may be delayed."
     )
