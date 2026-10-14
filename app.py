@@ -647,4 +647,465 @@ def show_stock_bar():
         else:
             price, previous, _ = quote_data
             change = price - previous
-            pct = (
+            pct = (price / previous - 1) * 100 if previous else 0
+
+            price_text = f"${price:,.2f}"
+            change_text = f"{change:+.2f} ({pct:+.2f}%)"
+
+            if change > 0:
+                css_class = "idx-up"
+                badge = "▲"
+            elif change < 0:
+                css_class = "idx-down"
+                badge = "▼"
+            else:
+                css_class = "idx-flat"
+                badge = "–"
+
+        card = (
+            '<div class="idx-wrap"><div class="idx-card">'
+            f'<div class="idx-logo" style="background:{bg};color:{fg};">'
+            f'{htmllib.escape(symbol[:5])}</div>'
+            '<div class="idx-details">'
+            f'<div class="idx-name">{htmllib.escape(company)}</div>'
+            f'<div class="idx-price">{price_text}</div>'
+            f'<div class="idx-chg {css_class}">{change_text}</div>'
+            '</div>'
+            f'<div class="idx-badge {css_class}">{badge}</div>'
+            '</div></div>'
+        )
+
+        with col:
+            st.markdown(INDEX_BAR_CSS + card, unsafe_allow_html=True)
+
+
+@st.fragment(run_every="10s" if auto_refresh else None)
+def show_bar_status():
+    now_et = datetime.now(ZoneInfo("America/New_York"))
+
+    st.caption(
+        f"Yahoo Finance quote | Last checked "
+        f"{now_et.strftime('%I:%M:%S %p')} ET | "
+        "Data may be delayed."
+    )
+
+
+with stock_bar_slot:
+    show_stock_bar()
+
+    current_stocks = st.session_state["top_stocks"]
+    edit_cols = st.columns(5, gap="small")
+
+    for i, (col, current) in enumerate(zip(edit_cols, current_stocks)):
+        with col:
+            with st.popover(
+                f"✏️ Change {current}",
+                use_container_width=True,
+            ):
+                new_symbol = st.text_input(
+                    "New ticker",
+                    key=f"new_ticker_{i}_{current}",
+                    placeholder="Example: AMD",
+                )
+
+                if st.button("Apply", key=f"apply_ticker_{i}_{current}"):
+                    symbol = new_symbol.strip().upper()
+
+                    if not symbol:
+                        st.warning("Type a ticker first.")
+                    elif symbol in current_stocks:
+                        st.warning(f"{symbol} is already in the bar.")
+                    elif get_quote(symbol) is None:
+                        st.error(f"No data found for {symbol}. Check the ticker.")
+                    else:
+                        st.session_state["top_stocks"][i] = symbol
+                        st.query_params["stocks"] = ",".join(
+                            st.session_state["top_stocks"]
+                        )
+                        st.rerun()
+
+    show_bar_status()
+
+
+# =========================================================
+# WATCHLIST — USE THE SAME QUOTE AS THE TOP BAR
+# =========================================================
+
+@st.fragment(run_every="60s" if auto_refresh else None)
+def show_watchlist():
+    st.subheader("⭐ Watchlist")
+
+    if not watchlist:
+        st.info("Select stocks in the sidebar.")
+        return
+
+    rows = []
+    progress = st.progress(0)
+    status = st.empty()
+
+    for i, symbol in enumerate(watchlist):
+        status.caption(f"Loading {symbol} ({i + 1}/{len(watchlist)})")
+
+        df = get_stock_data(symbol, "3mo", "1d")
+
+        if df.empty or len(df) < 2:
+            rows.append({
+                "Ticker": symbol,
+                "Price": "Unavailable",
+                "Daily Change": "N/A",
+                "RSI": "N/A",
+                "Signal": "NO DATA",
+            })
+        else:
+            data = add_indicators(df)
+            signal, _, _, _ = calculate_signal(data)
+            quote_data = get_quote(symbol)
+            rsi = data["RSI"].iloc[-1]
+
+            if quote_data is not None:
+                current, previous, _ = quote_data
+                price_text = f"${current:,.2f}"
+                pct = (current / previous - 1) * 100 if previous else 0
+                change_text = f"{pct:+.2f}%"
+            else:
+                price_text = "Unavailable"
+                change_text = "N/A"
+
+            rows.append({
+                "Ticker": symbol,
+                "Price": price_text,
+                "Daily Change": change_text,
+                "RSI": f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A",
+                "Signal": signal,
+            })
+
+        progress.progress((i + 1) / len(watchlist))
+
+    progress.empty()
+    status.empty()
+
+    st.dataframe(
+        pd.DataFrame(rows),
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    st.caption(
+        "Price and daily change use the shared quote function. "
+        "RSI and technical signals use daily candles. "
+        "Yahoo Finance data may be delayed."
+    )
+
+
+show_watchlist()
+st.divider()
+
+# =========================================================
+# MAIN CHART
+# =========================================================
+
+@st.fragment(run_every="15s" if auto_refresh else None)
+def show_main_chart():
+    st.subheader(f"📊 Main Stock: {ticker}")
+
+    raw = get_stock_data(ticker, period, interval)
+
+    if raw.empty or len(raw) < 2:
+        st.error(
+            "No usable data found. Check the ticker, connection, "
+            "or selected candle interval."
+        )
+        return
+
+    data = add_indicators(raw)
+    signal, score, checks, reasons = calculate_signal(data)
+    patterns = detect_patterns(data)
+
+    last = data.iloc[-1]
+    rsi = last["RSI"]
+    quote_data = get_quote(ticker)
+
+    if quote_data is not None:
+        price, previous, quote_time = quote_data
+        price_label = "Latest Quote"
+    else:
+        price = float(last["Close"])
+        previous = float(data["Close"].iloc[-2])
+        quote_time = str(data.index[-1])
+        price_label = "Latest Candle Close"
+
+    change_pct = (price / previous - 1) * 100 if previous else 0
+
+    c1, c2, c3, c4 = st.columns(4)
+
+    c1.metric(price_label, f"${price:,.2f}", f"{change_pct:+.2f}%")
+    c2.metric("Technical Signal", signal)
+    c3.metric(
+        "RSI (14)",
+        f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A",
+    )
+    c4.metric(
+        "SMA 20",
+        f"${float(last['SMA20']):,.2f}"
+        if pd.notna(last["SMA20"]) else "N/A",
+    )
+
+    st.caption(
+        f"Quote time: {quote_time} | The candlestick chart uses your "
+        "selected candle interval, so its last candle can differ from "
+        "the latest quote. Yahoo Finance data may be delayed."
+    )
+
+    green = "#238a23"
+    red = "#d6404f"
+    has_volume = "Volume" in data.columns
+
+    fig = make_subplots(
+        rows=2 if has_volume else 1,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.02,
+        row_heights=[0.82, 0.18] if has_volume else [1.0],
+    )
+
+    fig.add_trace(
+        go.Candlestick(
+            x=data.index,
+            open=data["Open"],
+            high=data["High"],
+            low=data["Low"],
+            close=data["Close"],
+            name="Price",
+            increasing=dict(
+                line=dict(color=green, width=1),
+                fillcolor=green,
+            ),
+            decreasing=dict(
+                line=dict(color=red, width=1),
+                fillcolor=red,
+            ),
+            whiskerwidth=0,
+        ),
+        row=1,
+        col=1,
+    )
+
+    if show_sma:
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["SMA20"],
+                name="SMA 20",
+                line=dict(color="#f5a623", width=1.2),
+            ),
+            row=1,
+            col=1,
+        )
+
+        fig.add_trace(
+            go.Scatter(
+                x=data.index,
+                y=data["SMA50"],
+                name="SMA 50",
+                line=dict(color="#4a90e2", width=1.2),
+            ),
+            row=1,
+            col=1,
+        )
+
+    if has_volume:
+        colors = [
+            green if close >= op else red
+            for op, close in zip(data["Open"], data["Close"])
+        ]
+
+        fig.add_trace(
+            go.Bar(
+                x=data.index,
+                y=data["Volume"],
+                name="Volume",
+                marker=dict(color=colors),
+                opacity=0.55,
+                showlegend=False,
+            ),
+            row=2,
+            col=1,
+        )
+
+        fig.update_yaxes(visible=False, row=2, col=1)
+
+    breaks = [dict(bounds=["sat", "mon"])]
+
+    if interval != "1d":
+        breaks.append(dict(bounds=[16, 9.5], pattern="hour"))
+
+    fig.update_xaxes(
+        rangebreaks=breaks,
+        showgrid=False,
+        rangeslider_visible=False,
+        showline=True,
+        linecolor="#ddd",
+    )
+
+    fig.update_yaxes(
+        side="right",
+        showgrid=True,
+        gridcolor="#eee",
+        zeroline=False,
+        tickformat=",.2f",
+        row=1,
+        col=1,
+    )
+
+    fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color="#333"),
+        height=550,
+        margin=dict(l=20, r=20, t=20, b=20),
+        hovermode="x unified",
+        legend=dict(orientation="h", y=1.02, x=0),
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.subheader("Why this signal was generated")
+    st.write(f"Technical score: {score} | Valid checks: {checks} of 3")
+
+    for reason in reasons:
+        st.write("• " + reason)
+
+    st.subheader("Candlestick Pattern Checks")
+
+    for pattern in patterns:
+        st.write("• " + pattern)
+
+    st.subheader("RSI (14) Chart")
+
+    rsi_fig = go.Figure()
+
+    rsi_fig.add_trace(
+        go.Scatter(
+            x=data.index,
+            y=data["RSI"],
+            name="RSI",
+        )
+    )
+
+    rsi_fig.add_hline(y=70, line_dash="dash", line_color="red")
+    rsi_fig.add_hline(y=30, line_dash="dash", line_color="green")
+
+    rsi_fig.update_layout(
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        font=dict(color="#333"),
+        height=260,
+        margin=dict(l=20, r=20, t=20, b=20),
+        yaxis=dict(range=[0, 100], side="right", gridcolor="#eee"),
+        xaxis=dict(showgrid=False),
+    )
+
+    st.plotly_chart(rsi_fig, use_container_width=True)
+
+
+show_main_chart()
+st.divider()
+
+# =========================================================
+# NEWS
+# =========================================================
+
+@st.cache_data(ttl=900, show_spinner=False)
+def get_stock_news(symbol):
+    try:
+        items = yf.Ticker(symbol).news or []
+        rows = []
+
+        for item in items:
+            content = item.get("content", item) if isinstance(item, dict) else {}
+
+            title = content.get("title") or item.get("title", "Untitled news")
+
+            provider = content.get("provider")
+            publisher = (
+                provider.get("displayName", "")
+                if isinstance(provider, dict)
+                else item.get("publisher", "")
+            )
+
+            published = (
+                content.get("pubDate")
+                or content.get("displayTime")
+                or item.get("providerPublishTime")
+            )
+
+            if isinstance(published, (int, float)):
+                published = datetime.fromtimestamp(
+                    published,
+                    tz=ZoneInfo("UTC"),
+                ).strftime("%Y-%m-%d %H:%M UTC")
+            elif not published:
+                published = "Date unavailable"
+            else:
+                published = str(published)
+
+            link = content.get("link", "")
+
+            if not link:
+                canonical = content.get("canonicalUrl", {})
+                if isinstance(canonical, dict):
+                    link = canonical.get("url", "")
+
+            if not link:
+                click_url = content.get("clickThroughUrl", {})
+                if isinstance(click_url, dict):
+                    link = click_url.get("url", "")
+
+            rows.append({
+                "Headline": title,
+                "Publisher": publisher or "Publisher unavailable",
+                "Published": published,
+                "Summary": content.get("summary", ""),
+                "Link": link or "",
+            })
+
+        return rows
+
+    except Exception:
+        return []
+
+
+def show_news(symbol):
+    st.subheader(f"📰 Latest News — {symbol}")
+
+    if st.button("🔄 Refresh news", key=f"news_{symbol}"):
+        get_stock_news.clear()
+        st.rerun()
+
+    items = get_stock_news(symbol)
+
+    if not items:
+        st.info("No news was returned. Try refreshing or check a financial news website.")
+        return
+
+    for article in items:
+        with st.container(border=True):
+            st.markdown(f"**{article['Headline']}**")
+            st.caption(f"{article['Publisher']} • {article['Published']}")
+
+            if article["Summary"]:
+                st.write(article["Summary"])
+
+            link = article["Link"]
+
+            if link and urlparse(link).scheme in ("https", "http"):
+                st.markdown(f"[Read full article]({link})")
+
+
+# =========================================================
+# EARNINGS & FINANCIAL RESULTS
+# =========================================================
+
+@st.cache_data(ttl=3600, show
