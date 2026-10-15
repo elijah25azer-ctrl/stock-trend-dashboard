@@ -1,3 +1,4 @@
+
 import html as htmllib
 import pandas as pd
 import plotly.graph_objects as go
@@ -18,8 +19,21 @@ st.set_page_config(
     layout="wide",
 )
 
-# Live stock bar is rendered into this slot
-# (the code that fills it is defined further down)
+# Hide Streamlit's Edit app / Deploy button visually.
+# This does not change app permissions.
+st.markdown("""
+<style>
+[data-testid="stAppDeployButton"] {
+    display: none !important;
+    visibility: hidden !important;
+}
+
+[data-testid="stToolbar"] {
+    visibility: hidden !important;
+}
+</style>
+""", unsafe_allow_html=True)
+
 stock_bar_slot = st.container()
 
 st.title("📈 Stock Signal Dashboard")
@@ -479,7 +493,6 @@ def get_earnings_data(symbol):
     try:
         stock = yf.Ticker(symbol)
 
-        # Quarterly income statement
         income = stock.quarterly_income_stmt
         financial_rows = []
 
@@ -519,7 +532,6 @@ def get_earnings_data(symbol):
 
         financials = pd.DataFrame(financial_rows)
 
-        # Earnings estimates and reported EPS
         earnings_rows = []
         try:
             earnings = stock.get_earnings_dates(limit=12)
@@ -563,7 +575,6 @@ def show_earnings(symbol):
 
     financials, earnings = get_earnings_data(symbol)
 
-    # Latest reported financial results
     st.markdown("### Latest Quarterly Financial Results")
 
     if financials.empty:
@@ -612,7 +623,6 @@ def show_earnings(symbol):
             hide_index=True,
         )
 
-    # Earnings estimates compared with actual reported EPS
     st.markdown("### 📊 Earnings: Estimate vs. Actual")
 
     if earnings.empty:
@@ -633,7 +643,7 @@ def show_earnings(symbol):
         )
 
 # =========================================================
-# BAR STYLING (used by the live stock bar)
+# BAR STYLING
 # =========================================================
 
 INDEX_BAR_CSS = """
@@ -683,9 +693,8 @@ INDEX_BAR_CSS = """
 </style>
 """
 
-
 # =========================================================
-# LIVE STOCK BAR (MSFT, AAPL, NVDA, TSLA, AMZN)
+# LIVE STOCK BAR
 # =========================================================
 
 DEFAULT_TOP_STOCKS = ["MSFT", "AAPL", "NVDA", "TSLA", "AMZN"]
@@ -695,7 +704,6 @@ KNOWN_NAMES = {
     "TSLA": "Tesla", "AMZN": "Amazon",
 }
 
-# logo background, logo text color
 KNOWN_STYLES = {
     "MSFT": ("#00a4ef", "#ffffff"),
     "AAPL": ("#a2aaad", "#111111"),
@@ -711,8 +719,6 @@ def parse_stock_list(text):
             out.append(item)
     return out[:5]
 
-# The 5 stocks in the top bar. Saved in the page URL (?stocks=...) so your
-# choices survive a browser refresh and can be bookmarked.
 if "top_stocks" not in st.session_state:
     saved = parse_stock_list(st.query_params.get("stocks", ""))
     if saved:
@@ -759,14 +765,12 @@ def get_quote(symbol):
     price = float(intraday["Close"].iloc[-1])
     last_day = intraday.index[-1].date()
 
-    # When the regular session is over, the official closing price (daily
-    # candle) can differ by a few cents from the last 1-minute candle.
-    # Brokers show the official close, so use that when the market is closed.
     now_et = datetime.now(ZoneInfo("America/New_York"))
     in_session = (
         now_et.weekday() < 5
         and (9, 30) <= (now_et.hour, now_et.minute) < (16, 0)
     )
+
     if not in_session:
         for day, close in reversed(daily):
             if day == last_day:
@@ -778,6 +782,7 @@ def get_quote(symbol):
         if day < last_day:
             prev = close
             break
+
     if prev is None:
         prev = float(intraday["Open"].iloc[0])
 
@@ -786,7 +791,7 @@ def get_quote(symbol):
 @st.fragment(run_every="10s" if auto_refresh else None)
 def show_stock_bar():
     symbols = st.session_state["top_stocks"]
-    cols = st.columns(len(symbols))  # same layout as the Change buttons
+    cols = st.columns(len(symbols))
 
     for col, symbol in zip(cols, symbols):
         quote = get_quote(symbol)
@@ -829,11 +834,13 @@ def show_bar_status():
         now_et.weekday() < 5
         and (9, 30) <= (now_et.hour, now_et.minute) < (16, 0)
     )
+
     source = (
         "🟢 Live prices from the newest 1-minute candle"
         if in_session else
         "🔴 Market closed: showing the official closing price"
     )
+
     st.caption(
         f"{source} | "
         f"Last checked {now_et.strftime('%I:%M:%S %p')} ET | "
@@ -843,15 +850,16 @@ def show_bar_status():
 with stock_bar_slot:
     show_stock_bar()
 
-    # Change buttons live OUTSIDE the auto-refreshing fragment so the pop-up
-    # does not close while you are typing. They use the same 5-column layout
-    # as the cards, so each button sits directly under its card.
     current_stocks = st.session_state["top_stocks"]
     edit_cols = st.columns(len(current_stocks))
 
     for i, (col, current) in enumerate(zip(edit_cols, current_stocks)):
         with col:
-            with st.popover("✏️ Edit", use_container_width=True, help=f"Change {current} to another stock"):
+            with st.popover(
+                "✏️ Edit",
+                use_container_width=True,
+                help=f"Change {current} to another stock",
+            ):
                 new_symbol = st.text_input(
                     "New ticker",
                     key=f"new_ticker_{i}_{current}",
@@ -969,8 +977,6 @@ def show_main_chart():
     change_pct = (price / previous - 1) * 100 if previous else 0
     rsi = last["RSI"]
 
-    # Use the same live quote as the top bar (newest 1-minute candle vs
-    # yesterday's close) so the two always show the same numbers.
     quote = get_quote(ticker)
     if quote is not None:
         live_price, live_prev, _ = quote
@@ -993,8 +999,8 @@ def show_main_chart():
         "Actual traded prices (not dividend-adjusted)."
     )
 
-    UP_COLOR = "#238a23"    # green candles
-    DOWN_COLOR = "#d6404f"  # red candles
+    UP_COLOR = "#238a23"
+    DOWN_COLOR = "#d6404f"
 
     has_volume = "Volume" in data.columns
     fig = make_subplots(
@@ -1047,7 +1053,6 @@ def show_main_chart():
         ), row=2, col=1)
         fig.update_yaxes(visible=False, row=2, col=1)
 
-    # Hide weekends (and overnight for intraday candles) so there are no gaps
     breaks = [dict(bounds=["sat", "mon"])]
     if interval != "1d":
         breaks.append(dict(bounds=[16, 9.5], pattern="hour"))
