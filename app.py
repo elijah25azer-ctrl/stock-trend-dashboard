@@ -23,19 +23,15 @@ st.set_page_config(
 
 st.markdown("""
 <style>
-[data-testid="stAppDeployButton"] {
-    display: none !important;
-}
-[data-testid="stToolbar"] {
-    visibility: hidden !important;
-}
+[data-testid="stAppDeployButton"] {display: none !important;}
+[data-testid="stToolbar"] {visibility: hidden !important;}
 </style>
 """, unsafe_allow_html=True)
 
 st.title("📈 Stock Signal Dashboard")
 st.caption(
-    "Stock prices | Candlesticks | Watchlist | Signals | "
-    "News | Earnings"
+    "Stock prices | Candlesticks | Watchlist | Short-term and "
+    "long-term outlooks | News | Earnings"
 )
 
 ET = ZoneInfo("America/New_York")
@@ -108,7 +104,8 @@ if custom_tickers.strip():
 
 auto_refresh = st.sidebar.toggle(
     "Auto-refresh data",
-    value=True,
+    value=False,
+    help="When enabled, refreshes the dashboard every 60 seconds.",
 )
 
 show_sma = st.sidebar.toggle(
@@ -204,18 +201,13 @@ def get_stock_data(symbol, history, candle_interval):
 
 @st.cache_data(ttl=30)
 def get_quote(symbol):
-    """
-    During regular hours, use the newest available 1-minute candle.
-    Outside regular hours, use the latest completed daily close.
-    Compare against the previous daily close.
-    """
     try:
         daily = get_stock_data(symbol, "1mo", "1d")
 
         if daily.empty or len(daily) < 2:
             return None
 
-        # Daily candles provide the official close comparison.
+        latest_daily_date = daily.index[-1]
         completed_price = float(daily["Close"].iloc[-1])
         previous_close = float(daily["Close"].iloc[-2])
 
@@ -223,7 +215,7 @@ def get_quote(symbol):
             return None
 
         price = completed_price
-        quote_time = str(daily.index[-1])
+        quote_time = str(latest_daily_date)
 
         now_et = datetime.now(ET)
         market_open = (
@@ -237,8 +229,14 @@ def get_quote(symbol):
             if not intraday.empty:
                 latest_time = intraday.index[-1]
 
-                # Do not accept a candle from an earlier trading day.
-                if latest_time.date() == now_et.date():
+                # Compare dates in Eastern Time where possible.
+                if latest_time.tzinfo is not None:
+                    latest_et = latest_time.tz_convert(ET)
+                    latest_date = latest_et.date()
+                else:
+                    latest_date = latest_time.date()
+
+                if latest_date == now_et.date():
                     price = float(intraday["Close"].iloc[-1])
                     quote_time = str(latest_time)
 
@@ -258,8 +256,13 @@ def get_quote(symbol):
 
 def add_indicators(df):
     df = df.copy()
+
+    if df.empty or "Close" not in df.columns:
+        return df
+
     close = df["Close"].astype(float)
 
+    df["SMA5"] = close.rolling(5).mean()
     df["SMA20"] = close.rolling(20).mean()
     df["SMA50"] = close.rolling(50).mean()
 
@@ -290,15 +293,15 @@ def add_indicators(df):
 
 
 # =========================================================
-# BUY / HOLD / SELL SIGNAL
+# LONG-TERM OUTLOOK
 # =========================================================
 
 def calculate_signal(df):
     """
-    Educational trend signal.
-    A low RSI alone cannot trigger a BUY.
-    Both trend and momentum must agree.
+    Longer-term technical classification using SMA20, SMA50,
+    and RSI. This is not a future-price guarantee.
     """
+
     if df is None or df.empty or len(df) < 50:
         return "INSUFFICIENT DATA", 0, 0, [
             "At least 50 daily candles are required."
@@ -324,19 +327,21 @@ def calculate_signal(df):
         if price > sma20 and sma20 > sma50:
             bullish += 1
             reasons.append(
-                "Bullish trend: price is above SMA20, "
+                "Long-term trend is bullish: price is above SMA20 "
                 "and SMA20 is above SMA50."
             )
         elif price < sma20 and sma20 < sma50:
             bearish += 1
             reasons.append(
-                "Bearish trend: price is below SMA20, "
+                "Long-term trend is bearish: price is below SMA20 "
                 "and SMA20 is below SMA50."
             )
         else:
-            reasons.append("Moving averages show a mixed trend.")
+            reasons.append(
+                "Long-term moving averages show a mixed trend."
+            )
     else:
-        reasons.append("Moving averages are unavailable.")
+        reasons.append("Long-term moving averages are unavailable.")
 
     if pd.notna(rsi):
         rsi = float(rsi)
@@ -345,20 +350,19 @@ def calculate_signal(df):
         if rsi >= 50:
             bullish += 1
             reasons.append(
-                f"RSI is {rsi:.1f}: momentum is positive."
+                f"Daily RSI is {rsi:.1f}: momentum is positive."
             )
         elif rsi <= 40:
             bearish += 1
             reasons.append(
-                f"RSI is {rsi:.1f}: momentum is weak. "
-                "A low RSI does not automatically mean BUY."
+                f"Daily RSI is {rsi:.1f}: momentum is weak."
             )
         else:
             reasons.append(
-                f"RSI is {rsi:.1f}: momentum is inconclusive."
+                f"Daily RSI is {rsi:.1f}: momentum is inconclusive."
             )
     else:
-        reasons.append("RSI is unavailable.")
+        reasons.append("Daily RSI is unavailable.")
 
     if checks < 2:
         signal = "INSUFFICIENT DATA"
@@ -370,6 +374,89 @@ def calculate_signal(df):
         signal = "HOLD"
 
     return signal, bullish - bearish, checks, reasons
+
+
+# =========================================================
+# SHORT-TERM OUTLOOK
+# =========================================================
+
+def calculate_short_term_signal(
+    df,
+    current_price=None,
+    daily_change_pct=None,
+):
+    """
+    Short-term technical classification using SMA5, recent
+    momentum, and RSI. A sharp daily decline blocks a BUY signal.
+    """
+
+    if df is None or df.empty or len(df) < 20:
+        return "INSUFFICIENT DATA", [
+            "At least 20 daily candles are required."
+        ]
+
+    data = add_indicators(df)
+    close = data["Close"].astype(float).dropna()
+
+    if len(close) < 20:
+        return "INSUFFICIENT DATA", [
+            "Not enough daily price history."
+        ]
+
+    price = (
+        float(current_price)
+        if current_price is not None
+        else float(close.iloc[-1])
+    )
+
+    sma5 = data["SMA5"].iloc[-1]
+    rsi_value = data["RSI"].iloc[-1]
+
+    previous_price = float(close.iloc[-6])
+
+    momentum = (
+        (price / previous_price - 1) * 100
+        if previous_price > 0 else 0
+    )
+
+    reasons = []
+
+    # A steep daily decline blocks a short-term BUY.
+    if daily_change_pct is not None and daily_change_pct <= -3:
+        return "HOLD", [
+            f"Daily change is {daily_change_pct:.2f}%.",
+            "Short-term BUY blocked because of a sharp daily drop.",
+            "Wait for clearer price direction; recovery is not guaranteed.",
+        ]
+
+    if pd.isna(sma5) or pd.isna(rsi_value):
+        return "INSUFFICIENT DATA", [
+            "Short-term moving average or RSI is unavailable."
+        ]
+
+    sma5 = float(sma5)
+    rsi_value = float(rsi_value)
+
+    if price > sma5 and momentum > 0 and rsi_value >= 50:
+        signal = "BUY"
+        reasons.append("Price is above the 5-day moving average.")
+        reasons.append(f"Recent momentum is positive: {momentum:+.2f}%.")
+        reasons.append(f"RSI is {rsi_value:.1f}, supporting momentum.")
+
+    elif price < sma5 and momentum < 0 and rsi_value <= 45:
+        signal = "SELL"
+        reasons.append("Price is below the 5-day moving average.")
+        reasons.append(f"Recent momentum is negative: {momentum:+.2f}%.")
+        reasons.append(f"RSI is {rsi_value:.1f}, showing weak momentum.")
+
+    else:
+        signal = "HOLD"
+        reasons.append(f"Recent momentum is {momentum:+.2f}%.")
+        reasons.append(
+            "Short-term indicators do not fully agree."
+        )
+
+    return signal, reasons
 
 
 # =========================================================
@@ -432,7 +519,7 @@ def detect_patterns(df):
 
 
 # =========================================================
-# TOP STOCK BAR
+# QUICK STOCK PRICES
 # =========================================================
 
 st.subheader("📌 Quick Stock Prices")
@@ -443,7 +530,6 @@ top_cols = st.columns(5)
 for col, symbol in zip(top_cols, top_stocks):
     with col:
         quote = get_quote(symbol)
-
         st.markdown(f"**{symbol}**")
 
         if quote is None:
@@ -460,15 +546,15 @@ for col, symbol in zip(top_cols, top_stocks):
             )
 
 st.caption(
-    "Quotes can be delayed. Outside regular trading hours, "
-    "the quick bar displays the latest available daily close."
+    "Quotes may be delayed. Outside trading hours, prices may "
+    "show the latest available daily close."
 )
 
 st.divider()
 
 
 # =========================================================
-# WATCHLIST
+# WATCHLIST: BOTH OUTLOOKS
 # =========================================================
 
 st.subheader("⭐ Watchlist")
@@ -481,12 +567,11 @@ else:
     status = st.empty()
 
     for i, symbol in enumerate(watchlist):
-        status.caption(
-            f"Loading {symbol} ({i + 1}/{len(watchlist)})"
-        )
+        status.caption(f"Loading {symbol} ({i + 1}/{len(watchlist)})")
 
         try:
             daily = get_stock_data(symbol, "1y", "1d")
+            quote = get_quote(symbol)
 
             if daily.empty or len(daily) < 50:
                 rows.append({
@@ -494,29 +579,40 @@ else:
                     "Price": "N/A",
                     "Change ($)": "N/A",
                     "Change (%)": "N/A",
+                    "Short-Term": "INSUFFICIENT DATA",
+                    "Long-Term": "INSUFFICIENT DATA",
                     "RSI": "N/A",
-                    "Signal": "INSUFFICIENT DATA",
                 })
             else:
                 data = add_indicators(daily)
-                signal, _, _, _ = calculate_signal(data)
 
-                quote = get_quote(symbol)
+                long_signal, _, _, _ = calculate_signal(data)
 
-                if quote is None:
-                    price_text = "N/A"
-                    change_text = "N/A"
-                    pct_text = "N/A"
-                else:
-                    price = quote["price"]
-                    previous = quote["previous_close"]
+                if quote is not None:
+                    price = float(quote["price"])
+                    previous = float(quote["previous_close"])
 
                     change = price - previous
-                    change_pct = (change / previous) * 100
+                    change_pct = (
+                        change / previous * 100 if previous > 0 else 0
+                    )
 
                     price_text = f"${price:,.2f}"
                     change_text = f"${change:+,.2f}"
                     pct_text = f"{change_pct:+.2f}%"
+
+                    short_signal, _ = calculate_short_term_signal(
+                        data,
+                        current_price=price,
+                        daily_change_pct=change_pct,
+                    )
+                else:
+                    price = float(daily["Close"].iloc[-1])
+                    price_text = f"${price:,.2f}"
+                    change_text = "N/A"
+                    pct_text = "N/A"
+
+                    short_signal, _ = calculate_short_term_signal(data)
 
                 rsi = data["RSI"].iloc[-1]
 
@@ -525,11 +621,9 @@ else:
                     "Price": price_text,
                     "Change ($)": change_text,
                     "Change (%)": pct_text,
-                    "RSI": (
-                        f"{float(rsi):.1f}"
-                        if pd.notna(rsi) else "N/A"
-                    ),
-                    "Signal": signal,
+                    "Short-Term": short_signal,
+                    "Long-Term": long_signal,
+                    "RSI": f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A",
                 })
 
         except Exception:
@@ -538,8 +632,9 @@ else:
                 "Price": "N/A",
                 "Change ($)": "N/A",
                 "Change (%)": "N/A",
+                "Short-Term": "NO DATA",
+                "Long-Term": "NO DATA",
                 "RSI": "N/A",
-                "Signal": "NO DATA",
             })
 
         progress.progress((i + 1) / len(watchlist))
@@ -554,9 +649,9 @@ else:
     )
 
     st.caption(
-        "Daily change compares the latest available price with "
-        "the previous daily close. Signals use daily candles. "
-        "Data can be delayed or incomplete."
+        "Short-Term uses recent momentum and the 5-day average. "
+        "Long-Term uses the 20-day and 50-day averages with RSI. "
+        "A long-term BUY does not mean the stock will rise today."
     )
 
 st.divider()
@@ -578,32 +673,41 @@ if raw.empty or len(raw) < 2:
 else:
     chart_data = add_indicators(raw)
 
-    # Always calculate the main recommendation from daily candles.
-    # This prevents a 1-day, 1-minute chart from breaking the signal.
-    signal_data = add_indicators(
-        get_stock_data(ticker, "1y", "1d")
+    # Signals always use daily history, regardless of chart interval.
+    daily_signal_raw = get_stock_data(ticker, "1y", "1d")
+    signal_data = add_indicators(daily_signal_raw)
+
+    long_signal, score, checks, long_reasons = calculate_signal(
+        signal_data
     )
-
-    signal, score, checks, reasons = calculate_signal(signal_data)
-    patterns = detect_patterns(chart_data)
-
-    last = chart_data.iloc[-1]
-    chart_price = float(last["Close"])
 
     quote = get_quote(ticker)
 
     if quote is not None:
-        displayed_price = quote["price"]
-        displayed_previous = quote["previous_close"]
+        displayed_price = float(quote["price"])
+        displayed_previous = float(quote["previous_close"])
+
         displayed_change = (
             (displayed_price / displayed_previous - 1) * 100
             if displayed_previous > 0 else 0
         )
+
+        short_signal, short_reasons = calculate_short_term_signal(
+            signal_data,
+            current_price=displayed_price,
+            daily_change_pct=displayed_change,
+        )
     else:
-        displayed_price = chart_price
+        displayed_price = float(chart_data["Close"].iloc[-1])
         displayed_change = None
 
-    c1, c2, c3, c4 = st.columns(4)
+        short_signal, short_reasons = calculate_short_term_signal(
+            signal_data
+        )
+
+    patterns = detect_patterns(chart_data)
+
+    c1, c2, c3, c4, c5 = st.columns(5)
 
     c1.metric(
         "Latest Available Price",
@@ -614,23 +718,30 @@ else:
         ),
     )
 
-    c2.metric("Daily Technical Signal", signal)
+    c2.metric("Short-Term Outlook", short_signal)
+    c3.metric("Long-Term Outlook", long_signal)
 
-    rsi = signal_data["RSI"].iloc[-1] if not signal_data.empty else float("nan")
-    c3.metric(
+    rsi = (
+        signal_data["RSI"].iloc[-1]
+        if not signal_data.empty else float("nan")
+    )
+    c4.metric(
         "Daily RSI (14)",
         f"{float(rsi):.1f}" if pd.notna(rsi) else "N/A",
     )
 
-    sma20 = signal_data["SMA20"].iloc[-1] if not signal_data.empty else float("nan")
-    c4.metric(
+    sma20 = (
+        signal_data["SMA20"].iloc[-1]
+        if not signal_data.empty else float("nan")
+    )
+    c5.metric(
         "Daily SMA 20",
         f"${float(sma20):,.2f}" if pd.notna(sma20) else "N/A",
     )
 
     st.caption(
         f"Chart candle: {chart_data.index[-1]} | "
-        "Signal is based on daily data, not just the visible chart."
+        "Outlooks use daily data, even when the chart uses intraday candles."
     )
 
     UP_COLOR = "#238a23"
@@ -718,9 +829,7 @@ else:
     breaks = [dict(bounds=["sat", "mon"])]
 
     if interval != "1d":
-        breaks.append(
-            dict(bounds=[16, 9.5], pattern="hour")
-        )
+        breaks.append(dict(bounds=[16, 9.5], pattern="hour"))
 
     fig.update_xaxes(
         rangebreaks=breaks,
@@ -747,16 +856,24 @@ else:
 
     st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("Why This Signal Was Generated")
+    st.subheader("📉 Short-Term Outlook Details")
 
-    st.write(f"Technical score: {score} | Valid checks: {checks} of 2")
+    for reason in short_reasons:
+        st.write(f"• {reason}")
 
-    for reason in reasons:
+    st.subheader("📈 Long-Term Outlook Details")
+
+    st.write(
+        f"Technical score: {score} | "
+        f"Valid checks: {checks} of 2"
+    )
+
+    for reason in long_reasons:
         st.write(f"• {reason}")
 
     st.caption(
-        "BUY, HOLD and SELL are simplified technical classifications, "
-        "not reliable predictions or personalized financial advice."
+        "BUY, HOLD, and SELL are simplified technical classifications. "
+        "They do not guarantee future price movements."
     )
 
     st.subheader("Candlestick Pattern Checks")
@@ -768,13 +885,14 @@ else:
 
     rsi_fig = go.Figure()
 
-    rsi_fig.add_trace(
-        go.Scatter(
-            x=signal_data.index,
-            y=signal_data["RSI"],
-            name="Daily RSI",
+    if not signal_data.empty:
+        rsi_fig.add_trace(
+            go.Scatter(
+                x=signal_data.index,
+                y=signal_data["RSI"],
+                name="Daily RSI",
+            )
         )
-    )
 
     rsi_fig.add_hline(
         y=70,
@@ -887,15 +1005,12 @@ with news_tab:
 
             link = article["link"]
 
-            if (
-                link
-                and urlparse(link).scheme in ("https", "http")
-            ):
+            if link and urlparse(link).scheme in ("https", "http"):
                 st.markdown(f"[Read full article]({link})")
 
 
 # =========================================================
-# EARNINGS & FINANCIAL RESULTS
+# EARNINGS AND FINANCIAL RESULTS
 # =========================================================
 
 @st.cache_data(ttl=3600)
@@ -933,10 +1048,7 @@ def get_earnings_data(symbol):
 
                     value = income.loc[row, date]
 
-                    return (
-                        float(value)
-                        if pd.notna(value) else None
-                    )
+                    return float(value) if pd.notna(value) else None
 
                 financial_rows.append({
                     "Quarter End": str(pd.Timestamp(date).date()),
@@ -947,7 +1059,6 @@ def get_earnings_data(symbol):
                 })
 
         financials = pd.DataFrame(financial_rows)
-
         earnings_rows = []
 
         try:
@@ -962,16 +1073,13 @@ def get_earnings_data(symbol):
                     earnings_rows.append({
                         "Earnings Date": str(date),
                         "EPS Estimate ($)": (
-                            float(estimate)
-                            if pd.notna(estimate) else None
+                            float(estimate) if pd.notna(estimate) else None
                         ),
                         "Reported EPS ($)": (
-                            float(actual)
-                            if pd.notna(actual) else None
+                            float(actual) if pd.notna(actual) else None
                         ),
                         "Surprise (%)": (
-                            float(surprise)
-                            if pd.notna(surprise) else None
+                            float(surprise) if pd.notna(surprise) else None
                         ),
                     })
 
@@ -1024,13 +1132,9 @@ with earnings_tab:
             "Operating Income",
             money(latest["Operating Income ($)"]),
         )
-        c4.metric(
-            "EPS",
-            eps_money(latest["EPS ($/share)"]),
-        )
+        c4.metric("EPS", eps_money(latest["EPS ($/share)"]))
 
         st.markdown("### Previous Quarterly Results")
-
         st.dataframe(
             financials,
             use_container_width=True,
@@ -1059,8 +1163,17 @@ with earnings_tab:
 st.divider()
 
 st.caption(
-    "Educational tool, not financial advice. Technical signals are "
-    "not guaranteed predictions. Yahoo Finance data may be delayed, "
-    "incomplete, or stale. Verify prices and company information "
-    "with official sources before making financial decisions."
+    "Educational tool, not financial advice. Short-term and long-term "
+    "outlooks are based on technical indicators, not guaranteed "
+    "predictions. Yahoo Finance data may be delayed, incomplete, or "
+    "stale. Verify prices and company information before making "
+    "financial decisions."
 )
+
+# Auto-refresh support for Streamlit versions that provide fragments.
+# The dashboard refreshes periodically only when the toggle is enabled.
+if auto_refresh:
+    st.caption(
+        "Auto-refresh is enabled where supported by your Streamlit version. "
+        "Use Refresh all data if your version does not refresh automatically."
+    )
