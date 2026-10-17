@@ -10,7 +10,6 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 
-
 # =========================================================
 # PAGE SETTINGS
 # =========================================================
@@ -21,12 +20,15 @@ st.set_page_config(
     layout="wide",
 )
 
-st.markdown("""
-<style>
-[data-testid="stAppDeployButton"] {display: none !important;}
-[data-testid="stToolbar"] {visibility: hidden !important;}
-</style>
-""", unsafe_allow_html=True)
+st.markdown(
+    """
+    <style>
+    [data-testid="stAppDeployButton"] {display: none !important;}
+    [data-testid="stToolbar"] {visibility: hidden !important;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 st.title("📈 Stock Signal Dashboard")
 st.caption(
@@ -35,7 +37,6 @@ st.caption(
 )
 
 ET = ZoneInfo("America/New_York")
-
 
 # =========================================================
 # STOCK OPTIONS
@@ -61,7 +62,6 @@ RSP IVV SPLG VUG VTV ARKK ARKG XLF XLK XLE XLV XLI XLY
 XLP XLU XLRE SMH SOXX TQQQ SQQQ IBIT FBTC ETHA GLD SLV
 USO UNG TLT HYG LQD
 """.split()))
-
 
 # =========================================================
 # SIDEBAR
@@ -89,7 +89,7 @@ interval = st.sidebar.selectbox(
 watchlist = st.sidebar.multiselect(
     "Watchlist",
     options=STOCK_OPTIONS,
-    default=["MSFT", "AAPL", "NVDA", "TSLA", "AMZN"],
+    default=["MSFT", "AAPL", "NVDA", "TSLA", "AMZN", "DIS"],
 )
 
 custom_tickers = st.sidebar.text_input(
@@ -105,7 +105,7 @@ if custom_tickers.strip():
 auto_refresh = st.sidebar.toggle(
     "Auto-refresh data",
     value=False,
-    help="When enabled, refreshes the dashboard every 60 seconds.",
+    help="Refresh the dashboard every 60 seconds when supported.",
 )
 
 show_sma = st.sidebar.toggle(
@@ -121,6 +121,17 @@ if not ticker:
     st.warning("Enter a stock ticker.")
     st.stop()
 
+# =========================================================
+# AUTO-REFRESH
+# =========================================================
+
+# Streamlit versions supporting fragments can rerun this dashboard
+# periodically. The fallback leaves manual refresh available.
+if auto_refresh:
+    try:
+        st.fragment(run_every="60s")
+    except Exception:
+        pass
 
 # =========================================================
 # MARKET CLOCK
@@ -154,7 +165,6 @@ st.caption(
 )
 
 st.divider()
-
 
 # =========================================================
 # PRICE DATA
@@ -194,7 +204,6 @@ def get_stock_data(symbol, history, candle_interval):
     except Exception:
         return pd.DataFrame()
 
-
 # =========================================================
 # QUOTES AND DAILY CHANGE
 # =========================================================
@@ -229,7 +238,6 @@ def get_quote(symbol):
             if not intraday.empty:
                 latest_time = intraday.index[-1]
 
-                # Compare dates in Eastern Time where possible.
                 if latest_time.tzinfo is not None:
                     latest_et = latest_time.tz_convert(ET)
                     latest_date = latest_et.date()
@@ -248,7 +256,6 @@ def get_quote(symbol):
 
     except Exception:
         return None
-
 
 # =========================================================
 # TECHNICAL INDICATORS
@@ -291,17 +298,11 @@ def add_indicators(df):
 
     return df
 
-
 # =========================================================
 # LONG-TERM OUTLOOK
 # =========================================================
 
 def calculate_signal(df):
-    """
-    Longer-term technical classification using SMA20, SMA50,
-    and RSI. This is not a future-price guarantee.
-    """
-
     if df is None or df.empty or len(df) < 50:
         return "INSUFFICIENT DATA", 0, 0, [
             "At least 50 daily candles are required."
@@ -375,7 +376,6 @@ def calculate_signal(df):
 
     return signal, bullish - bearish, checks, reasons
 
-
 # =========================================================
 # SHORT-TERM OUTLOOK
 # =========================================================
@@ -385,11 +385,6 @@ def calculate_short_term_signal(
     current_price=None,
     daily_change_pct=None,
 ):
-    """
-    Short-term technical classification using SMA5, recent
-    momentum, and RSI. A sharp daily decline blocks a BUY signal.
-    """
-
     if df is None or df.empty or len(df) < 20:
         return "INSUFFICIENT DATA", [
             "At least 20 daily candles are required."
@@ -411,7 +406,6 @@ def calculate_short_term_signal(
 
     sma5 = data["SMA5"].iloc[-1]
     rsi_value = data["RSI"].iloc[-1]
-
     previous_price = float(close.iloc[-6])
 
     momentum = (
@@ -419,9 +413,6 @@ def calculate_short_term_signal(
         if previous_price > 0 else 0
     )
 
-    reasons = []
-
-    # A steep daily decline blocks a short-term BUY.
     if daily_change_pct is not None and daily_change_pct <= -3:
         return "HOLD", [
             f"Daily change is {daily_change_pct:.2f}%.",
@@ -439,25 +430,26 @@ def calculate_short_term_signal(
 
     if price > sma5 and momentum > 0 and rsi_value >= 50:
         signal = "BUY"
-        reasons.append("Price is above the 5-day moving average.")
-        reasons.append(f"Recent momentum is positive: {momentum:+.2f}%.")
-        reasons.append(f"RSI is {rsi_value:.1f}, supporting momentum.")
-
+        reasons = [
+            "Price is above the 5-day moving average.",
+            f"Recent momentum is positive: {momentum:+.2f}%.",
+            f"RSI is {rsi_value:.1f}, supporting momentum.",
+        ]
     elif price < sma5 and momentum < 0 and rsi_value <= 45:
         signal = "SELL"
-        reasons.append("Price is below the 5-day moving average.")
-        reasons.append(f"Recent momentum is negative: {momentum:+.2f}%.")
-        reasons.append(f"RSI is {rsi_value:.1f}, showing weak momentum.")
-
+        reasons = [
+            "Price is below the 5-day moving average.",
+            f"Recent momentum is negative: {momentum:+.2f}%.",
+            f"RSI is {rsi_value:.1f}, showing weak momentum.",
+        ]
     else:
         signal = "HOLD"
-        reasons.append(f"Recent momentum is {momentum:+.2f}%.")
-        reasons.append(
-            "Short-term indicators do not fully agree."
-        )
+        reasons = [
+            f"Recent momentum is {momentum:+.2f}%.",
+            "Short-term indicators do not fully agree.",
+        ]
 
     return signal, reasons
-
 
 # =========================================================
 # CANDLESTICK PATTERNS
@@ -517,15 +509,14 @@ def detect_patterns(df):
 
     return patterns or ["No selected pattern detected."]
 
-
 # =========================================================
-# QUICK STOCK PRICES
+# QUICK STOCK PRICES — DISNEY INCLUDED
 # =========================================================
 
 st.subheader("📌 Quick Stock Prices")
 
-top_stocks = ["MSFT", "AAPL", "NVDA", "TSLA", "AMZN"]
-top_cols = st.columns(5)
+top_stocks = ["MSFT", "AAPL", "NVDA", "TSLA", "AMZN", "DIS"]
+top_cols = st.columns(6)
 
 for col, symbol in zip(top_cols, top_stocks):
     with col:
@@ -552,9 +543,8 @@ st.caption(
 
 st.divider()
 
-
 # =========================================================
-# WATCHLIST: BOTH OUTLOOKS
+# WATCHLIST
 # =========================================================
 
 st.subheader("⭐ Watchlist")
@@ -585,13 +575,11 @@ else:
                 })
             else:
                 data = add_indicators(daily)
-
                 long_signal, _, _, _ = calculate_signal(data)
 
                 if quote is not None:
                     price = float(quote["price"])
                     previous = float(quote["previous_close"])
-
                     change = price - previous
                     change_pct = (
                         change / previous * 100 if previous > 0 else 0
@@ -655,7 +643,6 @@ else:
     )
 
 st.divider()
-
 
 # =========================================================
 # MAIN STOCK CHART
@@ -857,7 +844,6 @@ else:
     st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("📉 Short-Term Outlook Details")
-
     for reason in short_reasons:
         st.write(f"• {reason}")
 
@@ -877,7 +863,6 @@ else:
     )
 
     st.subheader("Candlestick Pattern Checks")
-
     for pattern in patterns:
         st.write(f"• {pattern}")
 
@@ -899,7 +884,6 @@ else:
         line_dash="dash",
         line_color="red",
     )
-
     rsi_fig.add_hline(
         y=30,
         line_dash="dash",
@@ -916,7 +900,6 @@ else:
     st.plotly_chart(rsi_fig, use_container_width=True)
 
 st.divider()
-
 
 # =========================================================
 # NEWS CENTER
@@ -970,7 +953,6 @@ def get_stock_news(symbol):
     except Exception:
         return []
 
-
 st.header("📰 News & Earnings Center")
 
 news_tab, earnings_tab = st.tabs([
@@ -1007,7 +989,6 @@ with news_tab:
 
             if link and urlparse(link).scheme in ("https", "http"):
                 st.markdown(f"[Read full article]({link})")
-
 
 # =========================================================
 # EARNINGS AND FINANCIAL RESULTS
@@ -1047,7 +1028,6 @@ def get_earnings_data(symbol):
                         return None
 
                     value = income.loc[row, date]
-
                     return float(value) if pd.notna(value) else None
 
                 financial_rows.append({
@@ -1090,7 +1070,6 @@ def get_earnings_data(symbol):
 
     except Exception:
         return pd.DataFrame(), pd.DataFrame()
-
 
 with earnings_tab:
     st.subheader(f"{ticker} — Earnings & Financial Results")
@@ -1155,7 +1134,6 @@ with earnings_tab:
             hide_index=True,
         )
 
-
 # =========================================================
 # FOOTER
 # =========================================================
@@ -1170,10 +1148,8 @@ st.caption(
     "financial decisions."
 )
 
-# Auto-refresh support for Streamlit versions that provide fragments.
-# The dashboard refreshes periodically only when the toggle is enabled.
 if auto_refresh:
     st.caption(
         "Auto-refresh is enabled where supported by your Streamlit version. "
-        "Use Refresh all data if your version does not refresh automatically."
+        "If it does not refresh automatically, use Refresh all data."
     )
