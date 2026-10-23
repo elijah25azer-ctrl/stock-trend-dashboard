@@ -200,13 +200,14 @@ st.divider()
 # =========================================================
 
 @st.cache_data(ttl=15)
-def get_stock_data(symbol, history, candle_interval):
+def get_stock_data(symbol, history, candle_interval, prepost=False):
     try:
         df = yf.download(
             symbol,
             period=history,
             interval=candle_interval,
             auto_adjust=False,
+            prepost=prepost,
             progress=False,
             threads=False,
             timeout=15,
@@ -237,8 +238,15 @@ def get_stock_data(symbol, history, candle_interval):
 # QUOTES AND DAILY CHANGE
 # =========================================================
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=15)
 def get_quote(symbol):
+    """Price, change and extended-hours price, laid out like Google Finance.
+
+    - Regular hours: Yahoo's real-time regular-market price vs the previous
+      session's close (falls back to the newest 1-minute candle).
+    - Market closed: the official closing price vs the previous close, plus a
+      separate "After hours" / "Pre-market" line, just like Google Finance.
+    """
     try:
         now_et = datetime.now(ET)
         daily = get_stock_data(symbol, "10d", "1d")
@@ -248,11 +256,14 @@ def get_quote(symbol):
 
         daily = daily.sort_index().copy()
 
-        def trading_date(timestamp):
+        def to_et(timestamp):
             timestamp = pd.Timestamp(timestamp)
-            if timestamp.tzinfo is not None:
-                timestamp = timestamp.tz_convert(ET)
-            return timestamp.date()
+            if timestamp.tzinfo is None:
+                return timestamp.tz_localize(ET)
+            return timestamp.tz_convert(ET)
+
+        def trading_date(timestamp):
+            return to_et(timestamp).date()
 
         daily_dates = [trading_date(ts) for ts in daily.index]
         market_open = (
@@ -265,57 +276,111 @@ def get_quote(symbol):
         previous_close = None
         quote_time = ""
         status = ""
+        extended = None
 
-        # 1) During regular hours, try the newest 1-minute candle.
+        # ---------- 1) Regular trading hours ----------
         if market_open:
             previous_rows = daily.loc[
                 [day < now_et.date() for day in daily_dates]
             ]
-            intraday = get_stock_data(symbol, "1d", "1m")
 
-            if not previous_rows.empty and not intraday.empty:
-                today_rows = intraday.loc[
-                    [
-                        trading_date(ts) == now_et.date()
-                        for ts in intraday.index
-                    ]
-                ]
+            if not previous_rows.empty:
+                prev = float(previous_rows["Close"].iloc[-1])
 
-                if not today_rows.empty:
-                    candidate = float(today_rows["Close"].iloc[-1])
+                # (a) Yahoo's real-time regular-market price
+                try:
+                    meta = yf.Ticker(symbol).history_metadata or {}
+                    meta_price = meta.get("regularMarketPrice")
+                    meta_time = meta.get("regularMarketTime")
 
-                    latest_timestamp = pd.Timestamp(today_rows.index[-1])
-                    if latest_timestamp.tzinfo is None:
-                        latest_timestamp = latest_timestamp.tz_localize(ET)
-                    else:
-                        latest_timestamp = latest_timestamp.tz_convert(ET)
+                    if meta_price is not None and float(meta_price) > 0:
+                        if isinstance(meta_time, (int, float)):
+                            ts = pd.Timestamp(
+                                int(meta_time), unit="s", tz="UTC"
+                            ).tz_convert(ET)
+                        elif meta_time is not None:
+                            ts = to_et(meta_time)
+                        else:
+                            ts = None
 
-                    age_seconds = (
-                        now_et - latest_timestamp.to_pydatetime()
-                    ).total_seconds()
-
-                    if candidate > 0 and -60 <= age_seconds <= 15 * 60:
-                        price = candidate
-                        previous_close = float(
-                            previous_rows["Close"].iloc[-1]
+                        age = (
+                            (now_et - ts.to_pydatetime()).total_seconds()
+                            if ts is not None else 0
                         )
-                        quote_time = latest_timestamp.strftime(
-                            "%Y-%m-%d %I:%M:%S %p ET"
-                        )
-                        status = "Intraday quote (may be delayed)"
 
-        # 2) Fallback (and the normal path outside regular hours):
-        #    the latest daily candle versus the one before it.
-        #    This also covers exchange holidays, where no 1-minute
-        #    data exists, so the card never gets stuck on "N/A".
+                        if age <= 30 * 60:
+                            price = float(meta_price)
+                            previous_close = prev
+                            quote_time = (
+                                ts if ts is not None else now_et
+                            ).strftime("%Y-%m-%d %I:%M:%S %p ET")
+                            status = "Live price (may be delayed)"
+                except Exception:
+                    price = None
+
+                # (b) Fallback: newest 1-minute candle
+                if price is None:
+                    intraday = get_stock_data(symbol, "1d", "1m")
+
+                    if not intraday.empty:
+                        today_rows = intraday.loc[
+                            [
+                                trading_date(ts) == now_et.date()
+                                for ts in intraday.index
+                            ]
+                        ]
+
+                        if not today_rows.empty:
+                            candidate = float(today_rows["Close"].iloc[-1])
+                            latest_ts = to_et(today_rows.index[-1])
+                            age = (
+                                now_et - latest_ts.to_pydatetime()
+                            ).total_seconds()
+
+                            if candidate > 0 and -60 <= age <= 15 * 60:
+                                price = candidate
+                                previous_close = prev
+                                quote_time = latest_ts.strftime(
+                                    "%Y-%m-%d %I:%M:%S %p ET"
+                                )
+                                status = "Intraday quote (may be delayed)"
+
+        # ---------- 2) Market closed (or fallback) ----------
         if price is None:
             price = float(daily["Close"].iloc[-1])
             previous_close = float(daily["Close"].iloc[-2])
             quote_time = f"Close of {daily_dates[-1]}"
             status = (
-                "Latest daily price"
-                if market_open else "Latest daily close"
+                "Latest daily price" if market_open else "At close"
             )
+
+            # Extended hours price, like Google's "After hours" line
+            if not market_open:
+                try:
+                    ext = get_stock_data(symbol, "1d", "1m", True)
+
+                    if not ext.empty:
+                        last_ts = to_et(ext.index[-1])
+                        hm = (last_ts.hour, last_ts.minute)
+                        ext_price = float(ext["Close"].iloc[-1])
+
+                        if (
+                            ext_price > 0
+                            and last_ts.date() >= daily_dates[-1]
+                            and (hm >= (16, 0) or hm < (9, 30))
+                        ):
+                            extended = {
+                                "label": (
+                                    "After hours" if hm >= (16, 0)
+                                    else "Pre-market"
+                                ),
+                                "price": ext_price,
+                                "change": ext_price - price,
+                                "change_pct": (ext_price / price - 1) * 100,
+                                "time": last_ts.strftime("%I:%M %p ET"),
+                            }
+                except Exception:
+                    extended = None
 
         if (
             not pd.notna(price)
@@ -335,6 +400,7 @@ def get_quote(symbol):
             "change_pct": change_pct,
             "time": quote_time,
             "status": status,
+            "extended": extended,
         }
 
     except Exception:
@@ -638,6 +704,16 @@ for i, (col, symbol) in enumerate(zip(top_cols, quick_stocks)):
                 delta_color="normal",
             )
             st.caption(quote["status"])
+
+            ext = quote.get("extended")
+            if ext:
+                color = "green" if ext["change"] >= 0 else "red"
+                st.markdown(
+                    f"**{ext['label']}:** ${ext['price']:,.2f} "
+                    f":{color}[{format_change(ext['change'], ext['change_pct'])}]"
+                )
+                st.caption(f"As of {ext['time']}")
+
             st.caption(f"Updated: {quote['time']}")
 
         # Click to change this card to ANY stock ticker
@@ -670,8 +746,9 @@ if st.button("↩️ Reset quick stocks to default"):
     st.rerun()
 
 st.caption(
-    "During regular trading hours, quotes use Yahoo Finance 1-minute candles. "
-    "Outside those hours, the dashboard shows the latest daily close. "
+    "Laid out like Google Finance: during regular hours you see the live "
+    "price; when the market is closed you see the official close, with the "
+    "After-hours / Pre-market price on its own line. "
     "Green means up from the previous close; red means down. "
     "Yahoo Finance data may be delayed, incomplete, or unavailable."
 )
