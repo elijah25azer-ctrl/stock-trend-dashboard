@@ -598,10 +598,30 @@ def detect_patterns(df):
 
 st.subheader("📌 Quick Stock Prices")
 
-top_stocks = ["MSFT", "AAPL", "NVDA", "TSLA", "AMZN", "DIS"]
-top_cols = st.columns(6)
+DEFAULT_QUICK_STOCKS = ["MSFT", "AAPL", "NVDA", "TSLA", "AMZN", "DIS"]
+QUICK_SLOTS = 6
 
-for col, symbol in zip(top_cols, top_stocks):
+
+def parse_stock_list(text):
+    """Turn 'MSFT, aapl,TSLA' into ['MSFT', 'AAPL', 'TSLA'] (no duplicates)."""
+    result = []
+    for item in (text or "").upper().replace(" ", "").split(","):
+        if item and item not in result:
+            result.append(item)
+    return result[:QUICK_SLOTS]
+
+
+# Your 6 quick stocks are saved in the page address (?stocks=...), so they
+# survive a browser refresh and can be bookmarked.
+if "quick_stocks" not in st.session_state:
+    saved = parse_stock_list(st.query_params.get("stocks", ""))
+    filler = [d for d in DEFAULT_QUICK_STOCKS if d not in saved]
+    st.session_state["quick_stocks"] = (saved + filler)[:QUICK_SLOTS]
+
+quick_stocks = st.session_state["quick_stocks"]
+top_cols = st.columns(len(quick_stocks))
+
+for i, (col, symbol) in enumerate(zip(top_cols, quick_stocks)):
     with col:
         quote = get_quote(symbol)
         st.markdown(f"**{symbol}**")
@@ -619,6 +639,35 @@ for col, symbol in zip(top_cols, top_stocks):
             )
             st.caption(quote["status"])
             st.caption(f"Updated: {quote['time']}")
+
+        # Click to change this card to ANY stock ticker
+        with st.popover("✏️ Edit", use_container_width=True):
+            new_symbol = st.text_input(
+                "Any stock ticker",
+                key=f"quick_input_{i}_{symbol}",
+                placeholder="Example: AMD",
+            )
+
+            if st.button("Apply", key=f"quick_apply_{i}_{symbol}"):
+                sym = new_symbol.strip().upper()
+
+                if not sym:
+                    st.warning("Type a ticker first.")
+                elif sym in quick_stocks:
+                    st.warning(f"{sym} is already shown.")
+                elif get_quote(sym) is None:
+                    st.error(f"No data found for {sym}. Check the ticker.")
+                else:
+                    st.session_state["quick_stocks"][i] = sym
+                    st.query_params["stocks"] = ",".join(
+                        st.session_state["quick_stocks"]
+                    )
+                    st.rerun()
+
+if st.button("↩️ Reset quick stocks to default"):
+    st.session_state["quick_stocks"] = list(DEFAULT_QUICK_STOCKS)
+    st.query_params.clear()
+    st.rerun()
 
 st.caption(
     "During regular trading hours, quotes use Yahoo Finance 1-minute candles. "
