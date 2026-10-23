@@ -1,4 +1,3 @@
-
 import html
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -37,6 +36,36 @@ st.caption(
 )
 
 ET = ZoneInfo("America/New_York")
+
+# =========================================================
+# SMALL HELPERS (COLORS / FORMATTING)
+# =========================================================
+
+UP_COLOR = "#238a23"    # green
+DOWN_COLOR = "#d6404f"  # red
+
+
+def format_change(change, pct):
+    """Format a price change so the sign comes FIRST, e.g. '-$2.79 (-0.74%)'.
+
+    Streamlit colors a metric's delta red only when the text starts with a
+    minus sign. The old format '$-2.79' started with '$', so down moves were
+    shown in green.
+    """
+    sign = "+" if change >= 0 else "-"
+    return f"{sign}${abs(change):,.2f} ({pct:+.2f}%)"
+
+
+def color_change(value):
+    """Cell color for tables: red when negative, green when positive."""
+    text = str(value).strip()
+
+    if text.startswith("-"):
+        return f"color: {DOWN_COLOR}; font-weight: 600;"
+    if text.startswith("+"):
+        return f"color: {UP_COLOR}; font-weight: 600;"
+
+    return ""
 
 # =========================================================
 # STOCK OPTIONS
@@ -205,7 +234,7 @@ def get_stock_data(symbol, history, candle_interval):
         return pd.DataFrame()
 
 # =========================================================
-# QUOTES AND DAILY CHANGE — FIXED
+# QUOTES AND DAILY CHANGE
 # =========================================================
 
 @st.cache_data(ttl=20)
@@ -232,47 +261,61 @@ def get_quote(symbol):
             and (now_et.hour, now_et.minute) < (16, 0)
         )
 
+        price = None
+        previous_close = None
+        quote_time = ""
+        status = ""
+
+        # 1) During regular hours, try the newest 1-minute candle.
         if market_open:
-            # Compare today's intraday price with the last prior session close.
             previous_rows = daily.loc[
                 [day < now_et.date() for day in daily_dates]
             ]
-            if previous_rows.empty:
-                return None
-            previous_close = float(previous_rows["Close"].iloc[-1])
-
             intraday = get_stock_data(symbol, "1d", "1m")
-            if intraday.empty:
-                return None
 
-            today_rows = intraday.loc[
-                [trading_date(ts) == now_et.date() for ts in intraday.index]
-            ]
-            if today_rows.empty:
-                return None
+            if not previous_rows.empty and not intraday.empty:
+                today_rows = intraday.loc[
+                    [
+                        trading_date(ts) == now_et.date()
+                        for ts in intraday.index
+                    ]
+                ]
 
-            latest_time = today_rows.index[-1]
-            price = float(today_rows["Close"].iloc[-1])
-            latest_timestamp = pd.Timestamp(latest_time)
-            if latest_timestamp.tzinfo is None:
-                latest_timestamp = latest_timestamp.tz_localize(ET)
-            else:
-                latest_timestamp = latest_timestamp.tz_convert(ET)
+                if not today_rows.empty:
+                    candidate = float(today_rows["Close"].iloc[-1])
 
-            age_seconds = (
-                now_et - latest_timestamp.to_pydatetime()
-            ).total_seconds()
-            if price <= 0 or age_seconds < -60 or age_seconds > 15 * 60:
-                return None
+                    latest_timestamp = pd.Timestamp(today_rows.index[-1])
+                    if latest_timestamp.tzinfo is None:
+                        latest_timestamp = latest_timestamp.tz_localize(ET)
+                    else:
+                        latest_timestamp = latest_timestamp.tz_convert(ET)
 
-            quote_time = latest_timestamp.strftime("%Y-%m-%d %I:%M:%S %p ET")
-            status = "Intraday quote (may be delayed)"
-        else:
-            # Outside regular hours, use the latest daily close and prior close.
+                    age_seconds = (
+                        now_et - latest_timestamp.to_pydatetime()
+                    ).total_seconds()
+
+                    if candidate > 0 and -60 <= age_seconds <= 15 * 60:
+                        price = candidate
+                        previous_close = float(
+                            previous_rows["Close"].iloc[-1]
+                        )
+                        quote_time = latest_timestamp.strftime(
+                            "%Y-%m-%d %I:%M:%S %p ET"
+                        )
+                        status = "Intraday quote (may be delayed)"
+
+        # 2) Fallback (and the normal path outside regular hours):
+        #    the latest daily candle versus the one before it.
+        #    This also covers exchange holidays, where no 1-minute
+        #    data exists, so the card never gets stuck on "N/A".
+        if price is None:
             price = float(daily["Close"].iloc[-1])
             previous_close = float(daily["Close"].iloc[-2])
-            quote_time = str(daily.index[-1])
-            status = "Latest daily close"
+            quote_time = f"Close of {daily_dates[-1]}"
+            status = (
+                "Latest daily price"
+                if market_open else "Latest daily close"
+            )
 
         if (
             not pd.notna(price)
@@ -284,6 +327,7 @@ def get_quote(symbol):
 
         change = price - previous_close
         change_pct = (change / previous_close) * 100
+
         return {
             "price": price,
             "previous_close": previous_close,
@@ -292,6 +336,7 @@ def get_quote(symbol):
             "time": quote_time,
             "status": status,
         }
+
     except Exception:
         return None
 
@@ -548,7 +593,7 @@ def detect_patterns(df):
     return patterns or ["No selected pattern detected."]
 
 # =========================================================
-# QUICK STOCK PRICES — FIXED
+# QUICK STOCK PRICES
 # =========================================================
 
 st.subheader("📌 Quick Stock Prices")
@@ -568,10 +613,8 @@ for col, symbol in zip(top_cols, top_stocks):
             st.metric(
                 label="Price",
                 value=f"${quote['price']:,.2f}",
-                delta=(
-                    f"${quote['change']:+,.2f} "
-                    f"({quote['change_pct']:+.2f}%)"
-                ),
+                # Sign first ("-$2.79") so down moves show RED, up moves GREEN.
+                delta=format_change(quote["change"], quote["change_pct"]),
                 delta_color="normal",
             )
             st.caption(quote["status"])
@@ -580,6 +623,7 @@ for col, symbol in zip(top_cols, top_stocks):
 st.caption(
     "During regular trading hours, quotes use Yahoo Finance 1-minute candles. "
     "Outside those hours, the dashboard shows the latest daily close. "
+    "Green means up from the previous close; red means down. "
     "Yahoo Finance data may be delayed, incomplete, or unavailable."
 )
 
@@ -628,7 +672,9 @@ else:
                     )
 
                     price_text = f"${price:,.2f}"
-                    change_text = f"${change:+,.2f}"
+                    # Sign first so the table can color it red / green.
+                    sign = "+" if change >= 0 else "-"
+                    change_text = f"{sign}${abs(change):,.2f}"
                     pct_text = f"{change_pct:+.2f}%"
 
                     short_signal, _ = calculate_short_term_signal(
@@ -672,8 +718,21 @@ else:
     progress.empty()
     status.empty()
 
+    table = pd.DataFrame(rows)
+    styled_table = table.style
+
+    # pandas 2.1+ uses .map; older versions use .applymap
+    if hasattr(styled_table, "map"):
+        styled_table = styled_table.map(
+            color_change, subset=["Change ($)", "Change (%)"]
+        )
+    else:
+        styled_table = styled_table.applymap(
+            color_change, subset=["Change ($)", "Change (%)"]
+        )
+
     st.dataframe(
-        pd.DataFrame(rows),
+        styled_table,
         use_container_width=True,
         hide_index=True,
     )
@@ -772,9 +831,6 @@ else:
         f"Chart candle: {chart_data.index[-1]} | "
         "Outlooks use daily data, even when the chart uses intraday candles."
     )
-
-    UP_COLOR = "#238a23"
-    DOWN_COLOR = "#d6404f"
 
     has_volume = (
         "Volume" in chart_data.columns
