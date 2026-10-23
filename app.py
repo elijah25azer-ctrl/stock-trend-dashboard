@@ -205,55 +205,93 @@ def get_stock_data(symbol, history, candle_interval):
         return pd.DataFrame()
 
 # =========================================================
-# QUOTES AND DAILY CHANGE
+# QUOTES AND DAILY CHANGE — FIXED
 # =========================================================
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=20)
 def get_quote(symbol):
     try:
-        daily = get_stock_data(symbol, "1mo", "1d")
+        now_et = datetime.now(ET)
+        daily = get_stock_data(symbol, "10d", "1d")
 
         if daily.empty or len(daily) < 2:
             return None
 
-        latest_daily_date = daily.index[-1]
-        completed_price = float(daily["Close"].iloc[-1])
-        previous_close = float(daily["Close"].iloc[-2])
+        daily = daily.sort_index().copy()
 
-        if previous_close <= 0:
-            return None
+        def trading_date(timestamp):
+            timestamp = pd.Timestamp(timestamp)
+            if timestamp.tzinfo is not None:
+                timestamp = timestamp.tz_convert(ET)
+            return timestamp.date()
 
-        price = completed_price
-        quote_time = str(latest_daily_date)
-
-        now_et = datetime.now(ET)
+        daily_dates = [trading_date(ts) for ts in daily.index]
         market_open = (
             now_et.weekday() < 5
-            and (9, 30) <= (now_et.hour, now_et.minute) < (16, 0)
+            and (now_et.hour, now_et.minute) >= (9, 30)
+            and (now_et.hour, now_et.minute) < (16, 0)
         )
 
         if market_open:
+            # Compare today's intraday price with the last prior session close.
+            previous_rows = daily.loc[
+                [day < now_et.date() for day in daily_dates]
+            ]
+            if previous_rows.empty:
+                return None
+            previous_close = float(previous_rows["Close"].iloc[-1])
+
             intraday = get_stock_data(symbol, "1d", "1m")
+            if intraday.empty:
+                return None
 
-            if not intraday.empty:
-                latest_time = intraday.index[-1]
+            today_rows = intraday.loc[
+                [trading_date(ts) == now_et.date() for ts in intraday.index]
+            ]
+            if today_rows.empty:
+                return None
 
-                if latest_time.tzinfo is not None:
-                    latest_et = latest_time.tz_convert(ET)
-                    latest_date = latest_et.date()
-                else:
-                    latest_date = latest_time.date()
+            latest_time = today_rows.index[-1]
+            price = float(today_rows["Close"].iloc[-1])
+            latest_timestamp = pd.Timestamp(latest_time)
+            if latest_timestamp.tzinfo is None:
+                latest_timestamp = latest_timestamp.tz_localize(ET)
+            else:
+                latest_timestamp = latest_timestamp.tz_convert(ET)
 
-                if latest_date == now_et.date():
-                    price = float(intraday["Close"].iloc[-1])
-                    quote_time = str(latest_time)
+            age_seconds = (
+                now_et - latest_timestamp.to_pydatetime()
+            ).total_seconds()
+            if price <= 0 or age_seconds < -60 or age_seconds > 15 * 60:
+                return None
 
+            quote_time = latest_timestamp.strftime("%Y-%m-%d %I:%M:%S %p ET")
+            status = "Intraday quote (may be delayed)"
+        else:
+            # Outside regular hours, use the latest daily close and prior close.
+            price = float(daily["Close"].iloc[-1])
+            previous_close = float(daily["Close"].iloc[-2])
+            quote_time = str(daily.index[-1])
+            status = "Latest daily close"
+
+        if (
+            not pd.notna(price)
+            or not pd.notna(previous_close)
+            or price <= 0
+            or previous_close <= 0
+        ):
+            return None
+
+        change = price - previous_close
+        change_pct = (change / previous_close) * 100
         return {
             "price": price,
             "previous_close": previous_close,
+            "change": change,
+            "change_pct": change_pct,
             "time": quote_time,
+            "status": status,
         }
-
     except Exception:
         return None
 
@@ -510,7 +548,7 @@ def detect_patterns(df):
     return patterns or ["No selected pattern detected."]
 
 # =========================================================
-# QUICK STOCK PRICES — DISNEY INCLUDED
+# QUICK STOCK PRICES — FIXED
 # =========================================================
 
 st.subheader("📌 Quick Stock Prices")
@@ -525,20 +563,24 @@ for col, symbol in zip(top_cols, top_stocks):
 
         if quote is None:
             st.metric("Price", "N/A")
+            st.caption("Quote unavailable or delayed.")
         else:
-            price = quote["price"]
-            previous = quote["previous_close"]
-            change_pct = (price / previous - 1) * 100
-
             st.metric(
-                "Price",
-                f"${price:,.2f}",
-                f"{change_pct:+.2f}%",
+                label="Price",
+                value=f"${quote['price']:,.2f}",
+                delta=(
+                    f"${quote['change']:+,.2f} "
+                    f"({quote['change_pct']:+.2f}%)"
+                ),
+                delta_color="normal",
             )
+            st.caption(quote["status"])
+            st.caption(f"Updated: {quote['time']}")
 
 st.caption(
-    "Quotes may be delayed. Outside trading hours, prices may "
-    "show the latest available daily close."
+    "During regular trading hours, quotes use Yahoo Finance 1-minute candles. "
+    "Outside those hours, the dashboard shows the latest daily close. "
+    "Yahoo Finance data may be delayed, incomplete, or unavailable."
 )
 
 st.divider()
